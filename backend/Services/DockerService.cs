@@ -38,6 +38,10 @@ public class DockerService : IDockerService
             {
                 $"SSH_USER={username}",
                 $"SSH_PASSWORD={password}",
+                // 把资源配额透传给容器,供 entrypoint 的包装脚本使用
+                // (cgroup 路径在不同环境下不一致,环境变量最可靠)
+                $"VM_CPU_CORES={_opts.VmCpuCores}",
+                $"VM_MEMORY_MB={_opts.VmMemoryMB}",
             },
             ExposedPorts = new Dictionary<string, EmptyStruct>
             {

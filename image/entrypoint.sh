@@ -19,10 +19,49 @@ rm -f /etc/ssh/ssh_host_*
 ssh-keygen -A
 
 # ---------- 安装 free/nproc/lscpu 的"包装脚本" ----------
-# 这些命令默认走 syscall 或 /sys,会看到宿主真实资源。改为:
-# - 内存:读 LXCFS 渲染过的 /proc/meminfo(生效)
-# - CPU:直接读 cgroup 配额(因为很多宿主的 lxcfs 不支持 cgroup v2 渲染 cpuinfo)
+# 这些命令默认走 syscall 或 /sys,会看到宿主真实资源。改为读:
+# - CPU:优先读 backend 透传的 VM_CPU_CORES 环境变量(cgroup 兜底)
+# - 内存:读 LXCFS 渲染过的 /proc/meminfo
 install_wrappers() {
+    # fake nproc:优先环境变量,cgroup v2/v1 兜底
+    cat > /usr/local/bin/nproc <<'NPROC_EOF'
+#!/bin/sh
+read_cpu_count() {
+    # 1. 优先:backend 创建容器时透传的环境变量(最可靠)
+    if [ -n "$VM_CPU_CORES" ]; then
+        # 可能是小数,如 0.5,向上取整(0.5 核也算 "1")
+        n=$(awk -v v="$VM_CPU_CORES" 'BEGIN {
+            i = int(v)
+            if (v > i) i++
+            if (i < 1) i = 1
+            print i
+        }')
+        echo "$n" && return
+    fi
+    # 2. cgroup v2:/sys/fs/cgroup/cpu.max 格式 "quota period" 或 "max"
+    if [ -r /sys/fs/cgroup/cpu.max ]; then
+        read -r quota period < /sys/fs/cgroup/cpu.max 2>/dev/null
+        if [ "$quota" != "max" ] && [ -n "$quota" ] && [ -n "$period" ] && [ "$period" != "0" ]; then
+            n=$(( quota / period ))
+            [ "$n" -ge 1 ] && echo "$n" && return
+        fi
+    fi
+    # 3. cgroup v1:cpu.cfs_quota_us / cpu.cfs_period_us
+    if [ -r /sys/fs/cgroup/cpu/cpu.cfs_quota_us ] && [ -r /sys/fs/cgroup/cpu/cpu.cfs_period_us ]; then
+        quota=$(cat /sys/fs/cgroup/cpu/cpu.cfs_quota_us 2>/dev/null)
+        period=$(cat /sys/fs/cgroup/cpu/cpu.cfs_period_us 2>/dev/null)
+        if [ "$quota" -gt 0 ] && [ "$period" -gt 0 ] 2>/dev/null; then
+            n=$(( quota / period ))
+            [ "$n" -ge 1 ] && echo "$n" && return
+        fi
+    fi
+    # 4. 兜底:数 cpuinfo(可能不准,但好过啥都没有)
+    grep -c '^processor' /proc/cpuinfo 2>/dev/null || echo 1
+}
+read_cpu_count
+NPROC_EOF
+    chmod +x /usr/local/bin/nproc
+
     # fake free:从 /proc/meminfo 提取
     cat > /usr/local/bin/free <<'FREE_EOF'
 #!/bin/sh
@@ -50,37 +89,7 @@ END {
 FREE_EOF
     chmod +x /usr/local/bin/free
 
-    # fake nproc:直接读 cgroup CPU 配额(cgroup v2 优先,v1 兜底)
-    #   v2: /sys/fs/cgroup/cpu.max 格式 "quota period"(如 "100000 100000")或 "max"
-    #   v1: /sys/fs/cgroup/cpu/cpu.cfs_quota_us 和 cpu.cfs_period_us
-    cat > /usr/local/bin/nproc <<'NPROC_EOF'
-#!/bin/sh
-read_cpu_count() {
-    # cgroup v2
-    if [ -r /sys/fs/cgroup/cpu.max ]; then
-        read -r quota period < /sys/fs/cgroup/cpu.max 2>/dev/null
-        if [ "$quota" != "max" ] && [ -n "$quota" ] && [ -n "$period" ] && [ "$period" != "0" ]; then
-            n=$(( quota / period ))
-            [ "$n" -ge 1 ] && echo "$n" && return
-        fi
-    fi
-    # cgroup v1
-    if [ -r /sys/fs/cgroup/cpu/cpu.cfs_quota_us ] && [ -r /sys/fs/cgroup/cpu/cpu.cfs_period_us ]; then
-        quota=$(cat /sys/fs/cgroup/cpu/cpu.cfs_quota_us 2>/dev/null)
-        period=$(cat /sys/fs/cgroup/cpu/cpu.cfs_period_us 2>/dev/null)
-        if [ "$quota" -gt 0 ] && [ "$period" -gt 0 ] 2>/dev/null; then
-            n=$(( quota / period ))
-            [ "$n" -ge 1 ] && echo "$n" && return
-        fi
-    fi
-    # 兜底:数 cpuinfo(可能不准,但好过啥都没有)
-    grep -c '^processor' /proc/cpuinfo 2>/dev/null || echo 1
-}
-read_cpu_count
-NPROC_EOF
-    chmod +x /usr/local/bin/nproc
-
-    # fake lscpu:简化版,核数走 cgroup,型号走 cpuinfo 第一行
+    # fake lscpu:简化版,核数走 nproc,型号走 cpuinfo 第一行
     cat > /usr/local/bin/lscpu <<'LSCPU_EOF'
 #!/bin/sh
 n=$(/usr/local/bin/nproc)
