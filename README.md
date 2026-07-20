@@ -39,7 +39,7 @@
 ### 前置要求
 - 已安装 Docker 和 Docker Compose
 - 服务器内存 ≥ 1GB
-- 防火墙 / 安全组放行端口:`80`(网页)+ `20000-30000`(SSH 容器)
+- 防火墙 / 安全组放行端口:`8686`(网页)+ `20000-30000`(SSH 容器)
 
 ### 步骤
 
@@ -62,7 +62,7 @@ docker compose up -d --build
 docker compose logs -f backend
 ```
 
-看到 `SSH 镜像构建完成` 后,访问 `http://服务器IP/` 即可使用。
+看到 `SSH 镜像构建完成` 后,访问 `http://服务器IP:8686/` 即可使用。
 
 ### 更新
 

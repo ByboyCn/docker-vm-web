@@ -12,7 +12,8 @@ frontend/dist/
 frontend/.vs/
 
 # 数据(SQLite 持久化目录,部署时由 compose 挂载)
-data/
+# 注意:用 /data/ 锚定到仓库根目录,避免误伤 backend/Data/ 这种源码目录
+/data/
 *.db
 *.db-shm
 *.db-wal
