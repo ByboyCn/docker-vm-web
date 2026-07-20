@@ -70,6 +70,33 @@ public static class AuthEndpoints
             return Results.Ok(UserDto.From(user));
         });
 
+        // 修改密码(需登录,需校验旧密码)
+        grp.MapPost("/change-password", async (
+            ChangePasswordRequest req,
+            HttpContext ctx,
+            AuthService auth,
+            CancellationToken ct) =>
+        {
+            if (!ctx.RequireUser(out var user))
+            {
+                return Results.Json(new { error = "未登录或会话已过期" }, statusCode: 401);
+            }
+
+            try
+            {
+                var ok = await auth.ChangePasswordAsync(user!.Id, req.OldPassword, req.NewPassword, ct);
+                if (!ok)
+                {
+                    return Results.Json(new { error = "旧密码不正确" }, statusCode: 400);
+                }
+                return Results.Ok(new { ok = true });
+            }
+            catch (AuthException ex)
+            {
+                return Results.Json(new { error = ex.Message }, statusCode: ex.StatusCode);
+            }
+        });
+
         return app;
     }
 

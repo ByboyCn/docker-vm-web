@@ -82,6 +82,33 @@ public class AuthService
         }
     }
 
+    // ---------- 修改密码 ----------
+    /// <summary>
+    /// 校验旧密码后改成新密码。返回 false 表示旧密码不对。
+    /// </summary>
+    public async Task<bool> ChangePasswordAsync(
+        string userId, string oldPassword, string newPassword, CancellationToken ct = default)
+    {
+        ValidatePassword(newPassword);
+
+        var user = await _db.Users.FindAsync(new object?[] { userId }, ct);
+        if (user is null)
+        {
+            return false;
+        }
+
+        if (!PasswordHasher.Verify(oldPassword, user.PasswordHash, user.PasswordSalt))
+        {
+            return false;
+        }
+
+        var (hash, salt) = PasswordHasher.Hash(newPassword);
+        user.PasswordHash = hash;
+        user.PasswordSalt = salt;
+        await _db.SaveChangesAsync(ct);
+        return true;
+    }
+
     // ---------- 由 session id 解析当前用户 ----------
     public async Task<User?> ResolveBySessionAsync(string? sessionId, CancellationToken ct = default)
     {

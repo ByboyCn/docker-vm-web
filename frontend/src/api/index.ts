@@ -113,6 +113,9 @@ export const api = {
     return r.data
   }),
 
+  changePassword: (oldPassword: string, newPassword: string) =>
+    http.post('/auth/change-password', { oldPassword, newPassword }).then(r => r.data),
+
   // ---------- vm ----------
   createVm: () => http.post<VmDto>('/vm').then(r => r.data),
 

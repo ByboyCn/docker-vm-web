@@ -108,6 +108,12 @@ public class DockerService : IDockerService
         {
             return "missing";
         }
+        catch (DockerApiException ex) when (ex.StatusCode == System.Net.HttpStatusCode.NotFound)
+        {
+            // Docker.DotNet 在容器不存在时通常抛 DockerApiException(404),而不是
+            // DockerContainerNotFoundException —— 这里统一兜底成 "missing"
+            return "missing";
+        }
     }
 
     public async Task RemoveContainerAsync(string containerId, CancellationToken ct = default)
@@ -122,6 +128,10 @@ public class DockerService : IDockerService
         catch (DockerContainerNotFoundException)
         {
             // 容器已不存在,视作成功
+        }
+        catch (DockerApiException ex) when (ex.StatusCode == System.Net.HttpStatusCode.NotFound)
+        {
+            // 同上,Docker.DotNet 的 404 兜底
         }
     }
 

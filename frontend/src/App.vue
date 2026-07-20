@@ -3,12 +3,13 @@ import { computed, ref, onMounted } from 'vue'
 import { useRoute, useRouter } from 'vue-router'
 import {
   NMessageProvider, NDialogProvider, NConfigProvider, zhCN, dateZhCN, NEl,
-  NDropdown, NSpace, NTag,
+  NDropdown, NSpace, NTag, NModal, NCard, NForm, NFormItem, NInput, NButton, useMessage,
 } from 'naive-ui'
 import { api, getStoredUser, clearStoredUser, type UserDto } from './api'
 
 const route = useRoute()
 const router = useRouter()
+const msg = useMessage()
 
 const user = ref<UserDto | null>(getStoredUser())
 
@@ -31,6 +32,7 @@ const isLogin = computed(() => route.name === 'login')
 
 const userMenu = computed(() => {
   const items: any[] = [
+    { label: '修改密码', key: 'change-password' },
     { label: '退出登录', key: 'logout' },
   ]
   if (user.value?.isAdmin) {
@@ -49,11 +51,56 @@ async function onUserMenu(key: string) {
     router.push('/login')
   } else if (key === 'admin') {
     router.push('/admin')
+  } else if (key === 'change-password') {
+    openChangePassword()
   }
 }
 
 function selectUserDropdown(key: string) {
   onUserMenu(key)
+}
+
+// ---------- 修改密码弹窗 ----------
+const pwdModalShow = ref(false)
+const oldPwd = ref('')
+const newPwd = ref('')
+const confirmPwd = ref('')
+const pwdLoading = ref(false)
+
+function openChangePassword() {
+  oldPwd.value = ''
+  newPwd.value = ''
+  confirmPwd.value = ''
+  pwdModalShow.value = true
+}
+
+async function submitChangePassword() {
+  if (!oldPwd.value || !newPwd.value) {
+    msg.warning('请填写完整')
+    return
+  }
+  if (newPwd.value.length < 6) {
+    msg.warning('新密码至少 6 位')
+    return
+  }
+  if (newPwd.value !== confirmPwd.value) {
+    msg.warning('两次输入的新密码不一致')
+    return
+  }
+  pwdLoading.value = true
+  try {
+    await api.changePassword(oldPwd.value, newPwd.value)
+    msg.success('密码修改成功,请用新密码重新登录')
+    pwdModalShow.value = false
+    // 改完密码强制重新登录,清掉 session
+    clearStoredUser()
+    user.value = null
+    router.push('/login')
+  } catch (e: any) {
+    msg.error(e?.response?.data?.error ?? e?.message ?? '修改失败')
+  } finally {
+    pwdLoading.value = false
+  }
 }
 </script>
 
@@ -90,6 +137,54 @@ function selectUserDropdown(key: string) {
       </n-dialog-provider>
     </n-message-provider>
   </n-config-provider>
+
+  <!-- 修改密码弹窗 -->
+  <n-modal v-model:show="pwdModalShow" :auto-focus="false">
+    <n-card
+      style="width: 420px; max-width: 92vw;"
+      title="修改密码"
+      :bordered="false"
+      size="large"
+      role="dialog"
+      aria-modal="true"
+    >
+      <n-form @keyup.enter="submitChangePassword">
+        <n-form-item label="旧密码">
+          <n-input
+            v-model:value="oldPwd"
+            type="password"
+            show-password-on="click"
+            placeholder="请输入当前密码"
+          />
+        </n-form-item>
+        <n-form-item label="新密码">
+          <n-input
+            v-model:value="newPwd"
+            type="password"
+            show-password-on="click"
+            placeholder="至少 6 位"
+          />
+        </n-form-item>
+        <n-form-item label="确认新密码">
+          <n-input
+            v-model:value="confirmPwd"
+            type="password"
+            show-password-on="click"
+            placeholder="再次输入新密码"
+            @keyup.enter="submitChangePassword"
+          />
+        </n-form-item>
+      </n-form>
+      <template #footer>
+        <n-space justify="end">
+          <n-button @click="pwdModalShow = false">取消</n-button>
+          <n-button type="primary" :loading="pwdLoading" @click="submitChangePassword">
+            确认修改
+          </n-button>
+        </n-space>
+      </template>
+    </n-card>
+  </n-modal>
 </template>
 
 <style>
