@@ -38,8 +38,11 @@
 
 ### 前置要求
 - 已安装 Docker 和 Docker Compose
+- (可选)宿主机已装 Nginx,用于反代域名
 - 服务器内存 ≥ 1GB
-- 防火墙 / 安全组放行端口:`8686`(网页)+ `20000-30000`(SSH 容器)
+- 防火墙 / 安全组放行端口:
+  - 直接访问 IP 用法:`8686`(网页)+ `20000-30000`(SSH 容器)
+  - 域名反代用法:`80`/`443`(网页,由宿主 nginx 提供)+ `20000-30000`(SSH 容器)
 
 ### 步骤
 
@@ -70,6 +73,49 @@ docker compose logs -f backend
 git pull
 docker compose up -d --build
 ```
+
+### 用域名 + 宿主机 Nginx 反代(推荐生产用法)
+
+如果不想让用户记 IP:端口,可以让宿主机的 Nginx 反代到一个域名(如 `vm.byboy.cc`)。本仓库默认就把内部 8686 锁定到 `127.0.0.1`,对外只能通过 Nginx 进来。
+
+**1. 域名解析**:把 `vm.byboy.cc` 的 A 记录指向服务器公网 IP。
+
+**2. 装 Nginx 反代配置**(仓库里已带模板):
+
+```bash
+# 拷到 nginx 站点目录
+sudo cp deploy/nginx-vm.byboy.cc.conf /etc/nginx/conf.d/
+
+# 测试语法 + 重载
+sudo nginx -t && sudo nginx -s reload
+```
+
+> Ubuntu/Debian 用户如果用 `sites-available` + `sites-enabled` 模式,改成:
+> ```bash
+> sudo cp deploy/nginx-vm.byboy.cc.conf /etc/nginx/sites-available/vm.byboy.cc
+> sudo ln -s /etc/nginx/sites-available/vm.byboy.cc /etc/nginx/sites-enabled/
+> sudo nginx -t && sudo nginx -s reload
+> ```
+
+**3. 配置要点**(模板里已写好,这里说明):
+- `proxy_pass http://127.0.0.1:8686` —— 反代到本仓库 docker compose 暴露的端口
+- 透传 `X-Forwarded-Proto` —— 后端据此决定 Cookie 是否打 `Secure` 标志
+- 反代超时 180s —— 因为首次创建容器要 build 镜像,可能慢
+
+**4. 后续上 HTTPS**(强烈推荐):
+
+```bash
+sudo certbot --nginx -d vm.byboy.cc
+```
+
+certbot 会自动改 nginx 配置加上 443 + 证书,跑完就能用 `https://vm.byboy.cc/` 访问。此时后端的 Cookie 会自动变成 `Secure`(因为 `X-Forwarded-Proto=https`),`SameSite=Strict` 也生效。
+
+**5. 验证**:
+```bash
+curl -I http://vm.byboy.cc/api/health
+# 期望返回 200 + {"ok":true}
+```
+
 
 ---
 
@@ -147,6 +193,9 @@ docker-vm/
 └── image/                     # Alpine SSH 镜像(后端启动时自动 build)
     ├── Dockerfile
     └── entrypoint.sh
+
+deploy/                        # 外部宿主机的部署配置(可选)
+└── nginx-vm.byboy.cc.conf     # 宿主 nginx 反代到本机 8686 的站点模板
 ```
 
 ---

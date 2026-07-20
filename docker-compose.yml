@@ -28,7 +28,7 @@ services:
     container_name: docker-vm-frontend
     restart: unless-stopped
     ports:
-      - "8686:80"
+      - "127.0.0.1:8686:80"   # 只绑本机,对外由宿主 nginx 反代 vm.byboy.cc
     depends_on:
       - backend
     networks:
