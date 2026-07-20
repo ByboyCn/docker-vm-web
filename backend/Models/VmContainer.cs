@@ -10,6 +10,10 @@ public class VmContainer
     [Key]
     public string Key { get; set; } = Guid.NewGuid().ToString("N");
 
+    /// <summary>所属用户 Id。</summary>
+    [MaxLength(64)]
+    public string UserId { get; set; } = string.Empty;
+
     /// <summary>Docker 容器 ID。</summary>
     public string ContainerId { get; set; } = string.Empty;
 

@@ -3,6 +3,7 @@ import axios from 'axios'
 const http = axios.create({
   baseURL: '/api',
   timeout: 30000,
+  withCredentials: true,   // 带 cookie(session 鉴权)
 })
 
 export interface VmDto {
@@ -17,81 +18,99 @@ export interface VmDto {
   stoppedAt: string | null
 }
 
-// ---------- key 管理(localStorage) ----------
-const KEY_STORE = 'docker-vm-keys'
+export interface UserDto {
+  id: string
+  username: string
+  isAdmin: boolean
+}
 
-export function getMyKeys(): string[] {
+// ---------- 当前用户(localStorage 缓存,真正鉴权靠后端 cookie) ----------
+const USER_KEY = 'docker-vm-user'
+
+export function getStoredUser(): UserDto | null {
   try {
-    const raw = localStorage.getItem(KEY_STORE)
-    return raw ? JSON.parse(raw) as string[] : []
+    const raw = localStorage.getItem(USER_KEY)
+    return raw ? JSON.parse(raw) as UserDto : null
   } catch {
-    return []
+    return null
   }
 }
 
-export function addKey(key: string) {
-  const keys = getMyKeys()
-  if (!keys.includes(key)) {
-    keys.push(key)
-    localStorage.setItem(KEY_STORE, JSON.stringify(keys))
-  }
+export function setStoredUser(u: UserDto) {
+  localStorage.setItem(USER_KEY, JSON.stringify(u))
 }
 
-export function removeKey(key: string) {
-  const keys = getMyKeys().filter(k => k !== key)
-  localStorage.setItem(KEY_STORE, JSON.stringify(keys))
+export function clearStoredUser() {
+  localStorage.removeItem(USER_KEY)
 }
 
-// ---------- admin token(sessionStorage) ----------
-const ADMIN_KEY = 'docker-vm-admin-token'
-export function getAdminToken(): string {
-  return sessionStorage.getItem(ADMIN_KEY) ?? ''
-}
-export function setAdminToken(t: string) {
-  sessionStorage.setItem(ADMIN_KEY, t)
-}
-export function clearAdminToken() {
-  sessionStorage.removeItem(ADMIN_KEY)
+export function isLoggedIn(): boolean {
+  return !!getStoredUser()
 }
 
-// ---------- 拦截器:自动注入 header ----------
-http.interceptors.request.use(cfg => {
-  // 用户侧:带上所有 key
-  const keys = getMyKeys()
-  if (keys.length > 0) {
-    cfg.headers['X-VM-Key'] = keys.join(',')
+// ---------- 401 拦截:清登录态并跳转登录页 ----------
+http.interceptors.response.use(
+  r => r,
+  err => {
+    if (err?.response?.status === 401) {
+      clearStoredUser()
+      // 避免在登录页本身被反复跳转
+      const path = window.location.pathname
+      if (path !== '/login') {
+        window.location.href = '/login'
+      }
+    }
+    return Promise.reject(err)
   }
-  // 管理后台:带上 token
-  const token = getAdminToken()
-  if (token) {
-    cfg.headers.Authorization = `Bearer ${token}`
-  }
-  return cfg
-})
+)
 
 // ---------- API ----------
 export const api = {
   health: () => http.get<{ ok: boolean }>('/health').then(r => r.data),
 
-  createVm: () =>
-    http.post<VmDto>('/vm').then(r => {
-      addKey(r.data.key)
+  // ---------- auth ----------
+  register: (username: string, password: string) =>
+    http.post<UserDto>('/auth/register', { username, password }).then(r => {
+      setStoredUser(r.data)
       return r.data
     }),
+
+  login: (username: string, password: string) =>
+    http.post<UserDto>('/auth/login', { username, password }).then(r => {
+      setStoredUser(r.data)
+      return r.data
+    }),
+
+  logout: () => http.post('/auth/logout').then(r => {
+    clearStoredUser()
+    return r.data
+  }),
+
+  me: () => http.get<UserDto>('/auth/me').then(r => {
+    setStoredUser(r.data)
+    return r.data
+  }),
+
+  // ---------- vm ----------
+  createVm: () => http.post<VmDto>('/vm').then(r => r.data),
 
   listMy: () => http.get<VmDto[]>('/vm').then(r => r.data),
 
   getVm: (key: string) => http.get<VmDto>(`/vm/${key}`).then(r => r.data),
 
-  destroyVm: (key: string) => http.delete(`/vm/${key}`).then(r => {
-    removeKey(key)
-    return r.data
-  }),
+  destroyVm: (key: string) => http.delete(`/vm/${key}`).then(r => r.data),
 
+  // ---------- admin ----------
   adminList: () =>
     http.get<{ total: number; running: number; items: VmDto[] }>('/admin/containers').then(r => r.data),
 
   adminDestroy: (key: string) => http.delete(`/admin/containers/${key}`).then(r => r.data),
 
   adminCleanup: () => http.post<{ ok: boolean; removed: string[] }>('/admin/cleanup-orphans').then(r => r.data),
+
+  adminUsers: () =>
+    http.get<{ items: Array<{ Id: string; Username: string; IsAdmin: boolean; CreatedAt: string; containerCount: number }> }>('/admin/users').then(r => r.data),
 }
+
+// 把 axios 实例也导出,供拦截器外使用
+export { http }

@@ -8,27 +8,25 @@ namespace DockerVm.Endpoints;
 
 public static class AdminEndpoints
 {
-    public static IEndpointRouteBuilder MapAdminEndpoints(this IEndpointRouteBuilder app, AppOptions opts)
+    public static IEndpointRouteBuilder MapAdminEndpoints(this IEndpointRouteBuilder app)
     {
-        var grp = app.MapGroup("/api/admin").WithTags("admin").AddEndpointFilter(async (ctx, next) =>
-        {
-            // 校验 Bearer token
-            var auth = ctx.HttpContext.Request.Headers.Authorization.ToString();
-            if (!auth.StartsWith("Bearer ", StringComparison.OrdinalIgnoreCase)
-                || !CryptographicEquals(auth["Bearer ".Length..].Trim(), opts.AdminToken))
-            {
-                return Results.Unauthorized();
-            }
-            return await next(ctx);
-        });
+        var grp = app.MapGroup("/api/admin").WithTags("admin");
 
-        // 列出全部容器
+        // 列出全部容器(需管理员)
         grp.MapGet("/containers", async (
+            HttpContext ctx,
             AppDbContext db,
             IDockerService docker,
             AppOptions o,
             CancellationToken ct) =>
         {
+            if (!ctx.RequireAdmin(out var _))
+            {
+                return ctx.Response.StatusCode == 401
+                    ? Results.Json(new { error = "未登录或会话已过期" }, statusCode: 401)
+                    : Results.Json(new { error = "需要管理员权限" }, statusCode: 403);
+            }
+
             var list = await db.Containers.AsNoTracking().ToListAsync(ct);
             var ip = HostIpDetector.Detect(o.HostIp);
             var result = new List<VmDto>();
@@ -45,13 +43,21 @@ public static class AdminEndpoints
             });
         });
 
-        // 强制销毁单个
+        // 强制销毁单个(需管理员)
         grp.MapDelete("/containers/{key}", async (
             string key,
+            HttpContext ctx,
             AppDbContext db,
             IDockerService docker,
             CancellationToken ct) =>
         {
+            if (!ctx.RequireAdmin(out var _))
+            {
+                return ctx.Response.StatusCode == 401
+                    ? Results.Json(new { error = "未登录或会话已过期" }, statusCode: 401)
+                    : Results.Json(new { error = "需要管理员权限" }, statusCode: 403);
+            }
+
             var c = await db.Containers.FindAsync(new object?[] { key }, ct);
             if (c is null)
             {
@@ -63,12 +69,20 @@ public static class AdminEndpoints
             return Results.Ok(new { ok = true });
         });
 
-        // 清理孤儿:数据库有记录但 docker 已不存在的
+        // 清理孤儿:数据库有记录但 docker 已不存在的(需管理员)
         grp.MapPost("/cleanup-orphans", async (
+            HttpContext ctx,
             AppDbContext db,
             IDockerService docker,
             CancellationToken ct) =>
         {
+            if (!ctx.RequireAdmin(out var _))
+            {
+                return ctx.Response.StatusCode == 401
+                    ? Results.Json(new { error = "未登录或会话已过期" }, statusCode: 401)
+                    : Results.Json(new { error = "需要管理员权限" }, statusCode: 403);
+            }
+
             var all = await db.Containers.ToListAsync(ct);
             var removed = new List<string>();
             foreach (var c in all)
@@ -84,22 +98,41 @@ public static class AdminEndpoints
             return Results.Ok(new { ok = true, removed });
         });
 
-        return app;
-    }
+        // 列出所有用户(需管理员)
+        grp.MapGet("/users", async (
+            HttpContext ctx,
+            AppDbContext db,
+            CancellationToken ct) =>
+        {
+            if (!ctx.RequireAdmin(out var _))
+            {
+                return ctx.Response.StatusCode == 401
+                    ? Results.Json(new { error = "未登录或会话已过期" }, statusCode: 401)
+                    : Results.Json(new { error = "需要管理员权限" }, statusCode: 403);
+            }
 
-    private static bool CryptographicEquals(string a, string b)
-    {
-        var ab = System.Text.Encoding.UTF8.GetBytes(a ?? "");
-        var bb = System.Text.Encoding.UTF8.GetBytes(b ?? "");
-        if (ab.Length != bb.Length)
-        {
-            return false;
-        }
-        var diff = 0;
-        for (var i = 0; i < ab.Length; i++)
-        {
-            diff |= ab[i] ^ bb[i];
-        }
-        return diff == 0;
+            var users = await db.Users
+                .Select(u => new { u.Id, u.Username, u.IsAdmin, u.CreatedAt })
+                .ToListAsync(ct);
+
+            // 顺便统计每人容器数
+            var counts = await db.Containers
+                .GroupBy(c => c.UserId)
+                .Select(g => new { UserId = g.Key, Count = g.Count() })
+                .ToDictionaryAsync(x => x.UserId, x => x.Count, ct);
+
+            var items = users.Select(u => new
+            {
+                u.Id,
+                u.Username,
+                u.IsAdmin,
+                u.CreatedAt,
+                containerCount = counts.GetValueOrDefault(u.Id, 0),
+            });
+
+            return Results.Ok(new { items });
+        });
+
+        return app;
     }
 }

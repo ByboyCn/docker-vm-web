@@ -2,65 +2,33 @@
 import { h, onMounted, ref } from 'vue'
 import {
   NCard, NButton, NDataTable, NTag, NSpace, NPopconfirm, NEmpty, NStatistic,
-  NGrid, NGi, NModal, NInput, NInputGroup, useMessage,
+  NGrid, NGi, NTabs, NTabPane, useMessage,
 } from 'naive-ui'
 import type { DataTableColumns } from 'naive-ui'
-import {
-  api, getAdminToken, setAdminToken, clearAdminToken, type VmDto,
-} from '../api'
+import { api, type VmDto } from '../api'
 
 const msg = useMessage()
 
-const tokenInput = ref('')
-const tokenModalShow = ref(false)
+const tab = ref<'containers' | 'users'>('containers')
+
 const list = ref<VmDto[]>([])
 const total = ref(0)
 const running = ref(0)
 const loading = ref(false)
 
-const authorized = ref(!!getAdminToken())
-
-function promptToken() {
-  tokenInput.value = getAdminToken()
-  tokenModalShow.value = true
-}
-
-function saveToken() {
-  const t = tokenInput.value.trim()
-  if (!t) {
-    msg.warning('请输入 token')
-    return
-  }
-  setAdminToken(t)
-  authorized.value = true
-  tokenModalShow.value = false
-  refresh()
-}
-
-function logout() {
-  clearAdminToken()
-  authorized.value = false
-  list.value = []
-  total.value = 0
-  running.value = 0
-}
+const users = ref<Array<{ Id: string; Username: string; IsAdmin: boolean; CreatedAt: string; containerCount: number }>>([])
 
 async function refresh() {
-  if (!authorized.value) {
-    promptToken()
-    return
-  }
   loading.value = true
   try {
-    const data = await api.adminList()
-    list.value = data.items
-    total.value = data.total
-    running.value = data.running
+    const [c, u] = await Promise.all([api.adminList(), api.adminUsers()])
+    list.value = c.items
+    total.value = c.total
+    running.value = c.running
+    users.value = u.items
   } catch (e: any) {
-    if (e?.response?.status === 401) {
-      msg.error('Token 无效或已过期,请重新输入')
-      authorized.value = false
-      promptToken()
+    if (e?.response?.status === 403) {
+      msg.error('只有管理员可以访问后台')
     } else {
       msg.error('加载失败:' + (e?.message ?? ''))
     }
@@ -101,7 +69,7 @@ function fmtTime(t: string | null): string {
   return new Date(t).toLocaleString('zh-CN', { hour12: false })
 }
 
-const columns: DataTableColumns<VmDto> = [
+const containerColumns: DataTableColumns<VmDto> = [
   { title: '容器', key: 'containerName', ellipsis: { tooltip: true } },
   { title: 'Key', key: 'key', ellipsis: { tooltip: true } },
   {
@@ -131,10 +99,21 @@ const columns: DataTableColumns<VmDto> = [
   },
 ]
 
-onMounted(() => {
-  if (authorized.value) refresh()
-  else promptToken()
-})
+const userColumns = [
+  { title: '用户名', key: 'Username' },
+  {
+    title: '角色',
+    key: 'IsAdmin',
+    render: (r: any) =>
+      r.IsAdmin
+        ? h(NTag, { type: 'warning', size: 'small', round: true }, () => 'admin')
+        : h(NTag, { size: 'small', round: true }, () => 'user'),
+  },
+  { title: '容器数', key: 'containerCount' },
+  { title: '注册时间', key: 'CreatedAt', render: (r: any) => fmtTime(r.CreatedAt) },
+]
+
+onMounted(refresh)
 </script>
 
 <template>
@@ -144,7 +123,6 @@ onMounted(() => {
         <n-space>
           <n-button size="small" @click="refresh" :loading="loading">刷新</n-button>
           <n-button size="small" @click="cleanupOrphans">清理孤儿</n-button>
-          <n-button size="small" quaternary type="error" @click="logout">退出</n-button>
         </n-space>
       </template>
 
@@ -158,51 +136,30 @@ onMounted(() => {
       </n-grid>
     </n-card>
 
-    <n-card title="所有容器" size="large" :bordered="false">
-      <n-data-table
-        v-if="list.length > 0"
-        :columns="columns"
-        :data="list"
-        :bordered="false"
-        :pagination="{ pageSize: 20 }"
-      />
-      <n-empty v-else description="暂无容器" style="padding: 40px 0;" />
+    <n-card size="large" :bordered="false">
+      <n-tabs v-model:value="tab" type="line" animated>
+        <n-tab-pane name="containers" tab="所有容器">
+          <n-data-table
+            v-if="list.length > 0"
+            :columns="containerColumns"
+            :data="list"
+            :bordered="false"
+            :pagination="{ pageSize: 20 }"
+          />
+          <n-empty v-else description="暂无容器" style="padding: 40px 0;" />
+        </n-tab-pane>
+
+        <n-tab-pane name="users" tab="用户">
+          <n-data-table
+            v-if="users.length > 0"
+            :columns="userColumns"
+            :data="users"
+            :bordered="false"
+            :pagination="false"
+          />
+          <n-empty v-else description="暂无用户" style="padding: 40px 0;" />
+        </n-tab-pane>
+      </n-tabs>
     </n-card>
   </n-space>
-
-  <n-modal
-    :show="tokenModalShow"
-    @update:show="tokenModalShow = $event"
-    :mask-closable="false"
-    :auto-focus="false"
-  >
-    <n-card
-      style="width: 420px; max-width: 92vw;"
-      title="管理后台认证"
-      :bordered="false"
-      size="large"
-      role="dialog"
-      aria-modal="true"
-    >
-      <n-input-group>
-        <n-input
-          v-model:value="tokenInput"
-          placeholder="请输入 ADMIN_TOKEN"
-          type="password"
-          show-password-on="click"
-          @keyup.enter="saveToken"
-        />
-        <n-button type="primary" @click="saveToken">确认</n-button>
-      </n-input-group>
-      <p class="tip">Token 在后端的 .env 中配置(ADMIN_TOKEN)。</p>
-    </n-card>
-  </n-modal>
 </template>
-
-<style scoped>
-.tip {
-  margin: 12px 0 0;
-  font-size: 12px;
-  color: #86909c;
-}
-</style>

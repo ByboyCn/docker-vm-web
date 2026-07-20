@@ -10,13 +10,19 @@
 
 ## ✨ 功能
 
-**用户侧**(无需登录):
+**用户系统**(开放注册):
+- `/login` 页注册 / 登录,Session + Cookie 维持登录态(7 天)
+- 密码 PBKDF2 哈希,HttpOnly + SameSite=Strict cookie
+- 路由守卫:未登录自动跳登录页
+
+**用户侧**(`/`,需登录):
 - 一键开机器,弹窗显示连接信息(IP/端口/用户名/密码),每项可一键复制
-- 浏览器本地记住自己的 key,刷新页面自动恢复
+- 容器**绑定到用户**,只能看到和操作自己的容器
 - 查看我的容器列表、自助销毁
 
-**管理后台**(`/admin`,需 token):
+**管理后台**(`/admin`,需登录且 `IsAdmin=true`):
 - 查看所有容器(总数 / 运行中)
+- 查看所有用户(用户名 / 角色 / 容器数)
 - 强制销毁任意容器
 - 清理孤儿记录(数据库有记录但 Docker 已删除的)
 
@@ -42,9 +48,9 @@
 git clone <你的仓库地址> docker-vm
 cd docker-vm
 
-# 2. 复制配置文件,改一下 ADMIN_TOKEN
+# 2. 复制配置文件,改一下初始管理员账号密码
 cp .env.example .env
-vi .env   # 至少把 ADMIN_TOKEN 改成随机串
+vi .env   # 至少把 INITIAL_ADMIN_PASSWORD 改成强密码
 
 # 3. 一键启动
 docker compose up -d --build
@@ -74,37 +80,44 @@ docker compose up -d --build
 | `HOST_IP` | (自动探测) | 返回给用户的 IP。云主机建议手动写公网 IP |
 | `PORT_MIN` | `20000` | SSH 端口范围下限 |
 | `PORT_MAX` | `30000` | SSH 端口范围上限 |
-| `ADMIN_TOKEN` | `change-me-...` | **⚠️ 必改**。管理后台访问凭证 |
+| `INITIAL_ADMIN_USERNAME` | `admin` | **⚠️ 必改密码**。首启创建的初始管理员用户名 |
+| `INITIAL_ADMIN_PASSWORD` | `change-me-please` | **⚠️ 必改**。初始管理员密码 |
 | `SSH_USER` | `user` | 容器内创建的 SSH 用户名 |
 | `SSH_IMAGE_NAME` | `docker-vm-alpine:latest` | SSH 镜像名 |
 | `SSH_IMAGE_CONTEXT_DIR` | `/app/image` | 镜像构建目录(容器内路径) |
 | `CORS_ORIGINS` | `*` | 跨域来源,逗号分隔 |
 | `DOCKER_HOST` | `unix:///var/run/docker.sock` | Docker daemon 地址 |
 
-生成强 token:
-```bash
-openssl rand -hex 32
-```
+> `ADMIN_TOKEN` 配置项已废弃(向后兼容保留),新版管理后台改用登录账号的 `IsAdmin` 判断。
 
 ---
 
 ## 📡 API 一览
 
-### 用户侧(无需认证)
+### 认证(公开)
 | 方法 | 路径 | 说明 |
 |---|---|---|
-| `POST` | `/api/vm` | 创建容器 |
-| `GET` | `/api/vm` | 列出我的容器(header:`X-VM-Key: k1,k2`) |
-| `GET` | `/api/vm/{key}` | 查单个详情 |
-| `DELETE` | `/api/vm/{key}` | 自助销毁 |
+| `POST` | `/api/auth/register` | 注册,body: `{username, password}`,成功自动登录 |
+| `POST` | `/api/auth/login` | 登录 |
+| `POST` | `/api/auth/logout` | 登出 |
+| `GET` | `/api/auth/me` | 当前登录用户 |
 | `GET` | `/api/health` | 健康检查 |
 
-### 管理后台(header:`Authorization: Bearer <ADMIN_TOKEN>`)
+### 用户侧(需登录 cookie)
+| 方法 | 路径 | 说明 |
+|---|---|---|
+| `POST` | `/api/vm` | 创建容器(绑定到当前用户) |
+| `GET` | `/api/vm` | 列出我的容器 |
+| `GET` | `/api/vm/{key}` | 查单个详情(校验归属) |
+| `DELETE` | `/api/vm/{key}` | 自助销毁 |
+
+### 管理后台(需登录 + IsAdmin)
 | 方法 | 路径 | 说明 |
 |---|---|---|
 | `GET` | `/api/admin/containers` | 列出全部容器 |
 | `DELETE` | `/api/admin/containers/{key}` | 强制销毁 |
 | `POST` | `/api/admin/cleanup-orphans` | 清理孤儿记录 |
+| `GET` | `/api/admin/users` | 列出所有用户 |
 
 ---
 
@@ -160,10 +173,13 @@ npm run dev    # 监听 http://localhost:5173,/api 自动代理到 5000
 ## 🔒 安全须知
 
 1. **docker.sock 挂载 = 宿主机 root 权限**:本服务必须部署在**你完全可信**的服务器上,不要在多人共享的机器上开放公网访问。
-2. **ADMIN_TOKEN 必须改**:`change-me-to-random-string` 是默认值,务必替换为随机长字符串。
-3. **端口范围暴露**:容器端口(`PORT_MIN`-`PORT_MAX`)需要对外开放,云服务器请在安全组精确放行,不要开 `0-65535`。
-4. **密码明文存储**:为支持"凭 key 再次查看",SSH 密码在 SQLite 中**明文存储**。如果担心,可改 `Endpoints/VmEndpoints.cs` 删除返回与存储。
-5. **无用户认证**:用户侧任何访客都能开机器,建议在内网部署,或在 nginx 前加 IP 白名单 / Basic Auth。
+2. **初始管理员密码必须改**:`.env` 里的 `INITIAL_ADMIN_PASSWORD=change-me-please` 是默认值,务必改成强密码。该账号只在首次启动(数据库为空)时创建一次,改完密码后服务会自动用新值创建。
+3. **开放注册风险**:`/login` 页允许任何人注册账号并开机器。如果只给自己/朋友用,建议:
+   - 在 nginx 前加 IP 白名单
+   - 或修改 `backend/Endpoints/AuthEndpoints.cs` 关掉注册接口(注释 `/register` 路由)
+4. **端口范围暴露**:容器端口(`PORT_MIN`-`PORT_MAX`)需要对外开放,云服务器请在安全组精确放行,不要开 `0-65535`。
+5. **SSH 密码明文存储**:为支持"再次查看连接信息",容器 SSH 密码在 SQLite 中**明文存储**。如果担心,可改 `backend/Endpoints/VmEndpoints.cs` 删除返回与存储。
+6. **Cookie 安全**:session cookie 是 `HttpOnly + SameSite=Strict`,HTTPS 环境下自动加 `Secure`。生产请配 HTTPS(在 nginx 前加反代或证书)。
 
 ---
 
@@ -187,6 +203,15 @@ A: 改 `image/Dockerfile`,然后:
 docker rmi docker-vm-alpine:latest
 docker compose restart backend   # 后端会自动重新 build
 ```
+
+**Q: 从旧版(< 2.0,无登录系统)升级?**
+A: 数据库结构改了(新增 users / sessions 表,containers 加了 UserId 列),需要**清空数据库**重新初始化:
+```bash
+docker compose down
+rm data/docker-vm.db    # 容器是非持久化的,删了无所谓
+docker compose up -d --build
+```
+然后记得改 `.env` 里的 `INITIAL_ADMIN_PASSWORD`,首启会自动创建管理员账号。
 
 ---
 

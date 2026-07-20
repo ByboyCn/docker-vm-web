@@ -4,7 +4,7 @@ import {
   NCard, NButton, NDataTable, NTag, NSpace, NPopconfirm, NEmpty, useMessage,
 } from 'naive-ui'
 import type { DataTableColumns } from 'naive-ui'
-import { api, getMyKeys, removeKey, type VmDto } from '../api'
+import { api, type VmDto } from '../api'
 import ConnectionDialog from '../components/ConnectionDialog.vue'
 
 const msg = useMessage()
@@ -15,10 +15,6 @@ const dialogShow = ref(false)
 const currentVm = ref<VmDto | null>(null)
 
 async function refresh() {
-  if (getMyKeys().length === 0) {
-    list.value = []
-    return
-  }
   try {
     list.value = await api.listMy()
   } catch (e: any) {
@@ -42,7 +38,12 @@ async function create() {
 }
 
 async function reconnect(vm: VmDto) {
-  currentVm.value = vm
+  // 刷新一下最新状态再弹
+  try {
+    currentVm.value = await api.getVm(vm.key)
+  } catch {
+    currentVm.value = vm
+  }
   dialogShow.value = true
 }
 
@@ -51,11 +52,9 @@ async function destroy(vm: VmDto) {
     await api.destroyVm(vm.key)
     msg.success('已销毁')
     await refresh()
-  } catch {
-    // 后端记录可能已经没了,本地清理一下
-    removeKey(vm.key)
+  } catch (e: any) {
+    msg.error('销毁失败:' + (e?.response?.data?.error ?? e?.message ?? ''))
     await refresh()
-    msg.warning('已清理本地记录')
   }
 }
 
