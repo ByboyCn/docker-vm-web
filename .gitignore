@@ -1,0 +1,28 @@
+# 后端
+backend/bin/
+backend/obj/
+backend/.vs/
+
+# ZCode 工具内部文件
+.zcode/
+
+# 前端
+frontend/node_modules/
+frontend/dist/
+frontend/.vs/
+
+# 数据(SQLite 持久化目录,部署时由 compose 挂载)
+data/
+*.db
+*.db-shm
+*.db-wal
+
+# 本地环境
+.env
+.env.local
+
+# IDE
+.vs/
+.idea/
+*.user
+*.suo

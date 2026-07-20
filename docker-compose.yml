@@ -1,0 +1,39 @@
+services:
+  # ---------- 后端:管理 Docker、提供 API ----------
+  backend:
+    build: ./backend
+    image: docker-vm-backend:latest
+    container_name: docker-vm-backend
+    restart: unless-stopped
+    volumes:
+      # 控制宿主机 Docker(等同 root,务必只在可信服务器部署)
+      - /var/run/docker.sock:/var/run/docker.sock
+      # SQLite 数据持久化
+      - ./data:/data
+      # Alpine SSH 镜像源,启动时自动 build
+      - ./image:/app/image:ro
+    ports:
+      - "5000:5000"
+    env_file: .env
+    environment:
+      ASPNETCORE_URLS: http://+:5000
+      DB_PATH: /data/docker-vm.db
+    networks:
+      - docker-vm-net
+
+  # ---------- 前端:Nginx 托管 Vue + 反代 /api ----------
+  frontend:
+    build: ./frontend
+    image: docker-vm-frontend:latest
+    container_name: docker-vm-frontend
+    restart: unless-stopped
+    ports:
+      - "80:80"
+    depends_on:
+      - backend
+    networks:
+      - docker-vm-net
+
+networks:
+  docker-vm-net:
+    driver: bridge
