@@ -127,10 +127,10 @@ public static class AdminEndpoints
 
             var items = users.Select(u => new
             {
-                u.Id,
-                u.Username,
-                u.IsAdmin,
-                u.CreatedAt,
+                id = u.Id,
+                username = u.Username,
+                isAdmin = u.IsAdmin,
+                createdAt = u.CreatedAt,
                 containerCount = counts.GetValueOrDefault(u.Id, 0),
                 bonus = bonuses.GetValueOrDefault(u.Id, 0),
             });

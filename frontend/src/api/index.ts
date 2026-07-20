@@ -134,7 +134,7 @@ export const api = {
   adminCleanup: () => http.post<{ ok: boolean; removed: string[] }>('/admin/cleanup-orphans').then(r => r.data),
 
   adminUsers: () =>
-    http.get<{ items: Array<{ Id: string; Username: string; IsAdmin: boolean; CreatedAt: string; containerCount: number; bonus: number }> }>('/admin/users').then(r => r.data),
+    http.get<{ items: Array<{ id: string; username: string; isAdmin: boolean; createdAt: string; containerCount: number; bonus: number }> }>('/admin/users').then(r => r.data),
 
   // ---------- quota ----------
   getMyQuota: () => http.get<UserQuotaDto>('/quota').then(r => r.data),

@@ -19,7 +19,7 @@ const running = ref(0)
 const loading = ref(false)
 
 // ---------- 用户 ----------
-const users = ref<Array<{ Id: string; Username: string; IsAdmin: boolean; CreatedAt: string; containerCount: number; bonus: number }>>([])
+const users = ref<Array<{ id: string; username: string; isAdmin: boolean; createdAt: string; containerCount: number; bonus: number }>>([])
 
 // ---------- 名额 ----------
 const quota = ref<AdminQuotaDto | null>(null)
@@ -95,11 +95,11 @@ async function resetQuota() {
   }
 }
 
-function openBonusModal(row: { Id: string; Username: string; bonus: number }) {
-  editingUser.value = { id: row.Id, name: row.Username }
+function openBonusModal(row: { id: string; username: string; bonus: number }) {
+  editingUser.value = { id: row.id, name: row.username }
   editBonusValue.value = row.bonus
   // 找原有备注
-  const item = quota.value?.userBonuses.find(u => u.userId === row.Id)
+  const item = quota.value?.userBonuses.find(u => u.userId === row.id)
   editBonusNote.value = item?.note ?? ''
   bonusModalShow.value = true
 }
@@ -160,12 +160,12 @@ const containerColumns: DataTableColumns<VmDto> = [
 ]
 
 const userColumns = computed<DataTableColumns<any>>(() => [
-  { title: '用户名', key: 'Username' },
+  { title: '用户名', key: 'username' },
   {
     title: '角色',
-    key: 'IsAdmin',
+    key: 'isAdmin',
     render: (r: any) =>
-      r.IsAdmin
+      r.isAdmin
         ? h(NTag, { type: 'warning', size: 'small', round: true }, () => 'admin')
         : h(NTag, { size: 'small', round: true }, () => 'user'),
   },
@@ -177,7 +177,7 @@ const userColumns = computed<DataTableColumns<any>>(() => [
       h(NButton, { size: 'small', tertiary: true, onClick: () => openBonusModal(r) },
         () => r.bonus > 0 ? `${r.bonus} 台 (点击编辑)` : '0 (点击设置)'),
   },
-  { title: '注册时间', key: 'CreatedAt', render: (r: any) => fmtTime(r.CreatedAt) },
+  { title: '注册时间', key: 'createdAt', render: (r: any) => fmtTime(r.createdAt) },
 ])
 
 onMounted(refresh)
