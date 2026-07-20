@@ -53,4 +53,15 @@ public class AppOptions
 
     /// <summary>首启初始化的全局名额总额度。</summary>
     public int QuotaInitialTotal { get; set; } = 5;
+
+    // ---------- LXCFS(可选,让容器内 /proc 反映实际配额)----------
+
+    /// <summary>是否启用 LXCFS 挂载。要求宿主已安装并运行 lxcfs。</summary>
+    public bool EnableLxcfs { get; set; } = true;
+
+    /// <summary>宿主 lxcfs 的 proc 目录路径(backend 容器视角,需在 docker-compose 挂载)。</summary>
+    public string LxcfsProcDir { get; set; } = "/var/lib/lxcfs/proc";
+
+    /// <summary>运行时探测结果:宿主 lxcfs 是否真的可用。启动时赋值。</summary>
+    public bool LxcfsActuallyEnabled { get; set; }
 }

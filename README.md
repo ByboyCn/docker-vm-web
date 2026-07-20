@@ -151,6 +151,8 @@ curl -I http://vm.byboy.cc/api/health
 | `VM_PIDS_LIMIT` | `200` | 每台容器进程/线程数上限 |
 | `VM_DISK_SIZE` | `5g` | 每台容器磁盘配额(依赖宿主,见下文) |
 | `QUOTA_INITIAL_TOTAL` | `5` | 首启初始化的全局名额总数(之后由 admin 管理) |
+| `ENABLE_LXCFS` | `true` | 是否启用 LXCFS(/proc 视图隔离,见下文) |
+| `LXCFS_PROC_DIR` | `/var/lib/lxcfs/proc` | 宿主 lxcfs 的 proc 目录路径 |
 
 > `ADMIN_TOKEN` 配置项已废弃(向后兼容保留),新版管理后台改用登录账号的 `IsAdmin` 判断。
 
@@ -289,6 +291,64 @@ docker compose up -d      # 不用 --build,只重启
 3. **给某用户加量**:"用户" Tab → 对应用户行"个人加量"列 → 点击设置数量和备注
 4. **用户开机器**:优先消耗全局池,全局空了才消耗个人加量
 5. **销毁容器不退名额**(防刷)—— 如需改成"销毁退还",改 `backend/Services/QuotaService.cs` 注释里那一行
+
+---
+
+## 🔒 LXCFS:让容器内 `/proc` 反映实际配额(推荐)
+
+默认情况下,docker 容器内的 `free` / `nproc` / `top` 看到的是**宿主机全部资源**(比如宿主 32 核 64G,容器内 `nproc` 也是 32),即使你设了 `--cpus=1 --memory=1g`。这是因为 `/proc` 是宿主内核的视图,没做隔离。
+
+**LXCFS** 通过 FUSE 把 `/proc/meminfo`、`/proc/cpuinfo` 等按容器实际配额重新渲染,让容器内看到的是真实的 1核 1G。
+
+### 安装 LXCFS(宿主上,一次性)
+
+**Ubuntu/Debian:**
+```bash
+sudo apt update && sudo apt install -y lxcfs
+sudo systemctl enable --now lxcfs
+```
+
+**CentOS/RHEL:** 需要装 EPEL,然后 `sudo yum install -y lxcfs && sudo systemctl enable --now lxcfs`
+
+验证是否就绪:
+```bash
+ls /var/lib/lxcfs/proc/
+# 应该看到 meminfo cpuinfo loadavg stat uptime diskstats swaps 等文件
+```
+
+### 启用本项目对 LXCFS 的支持
+
+本项目已经默认配置好,只要宿主上 lxcfs 就绪,新开的容器会自动挂载 `/var/lib/lxcfs/proc/*` 到容器内对应路径,**无需任何额外操作**。
+
+后端启动时会探测:
+```
+LXCFS 探测成功,新容器将挂载 /var/lib/lxcfs/proc 以隔离 /proc 视图
+```
+
+### 验证容器内生效
+
+```bash
+# 用户开一台机器后,从管理后台拿到端口(比如 20001)
+ssh user@54.39.157.105 -p 20001
+# 进入容器后:
+free -m       # 应该看到 ~1G,而不是宿主真实内存
+nproc         # 应该看到 1,而不是宿主全部核数
+top           # 同上
+```
+
+### 自动降级
+
+如果宿主没装 lxcfs,或 `/var/lib/lxcfs/proc` 目录不存在/为空,后端会:
+- 打 warning 日志(不影响功能)
+- 创建容器时**不挂载** lxcfs bind
+- 容器内 `/proc` 仍然看到宿主真实资源(CPU/内存配额本身仍然生效,只是 `/proc` 视图没隔离)
+
+### 关闭 LXCFS
+
+如果不想用(比如 lxcfs 占用太多资源),在 `.env` 加:
+```env
+ENABLE_LXCFS=false
+```
 
 ---
 

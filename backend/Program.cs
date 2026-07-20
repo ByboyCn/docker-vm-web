@@ -36,6 +36,15 @@ opts.VmDiskSize = Environment.GetEnvironmentVariable("VM_DISK_SIZE") ?? opts.VmD
 _ = int.TryParse(Environment.GetEnvironmentVariable("QUOTA_INITIAL_TOTAL"), out var qInit) ? qInit : opts.QuotaInitialTotal;
 opts.QuotaInitialTotal = qInit;
 
+// ---------- LXCFS 配置 ----------
+// ENABLE_LXCFS 不设置时默认 "true"(向后兼容)。明确传 "false"/"0" 才关闭
+var enableLxcfsRaw = Environment.GetEnvironmentVariable("ENABLE_LXCFS");
+opts.EnableLxcfs = enableLxcfsRaw is null
+    ? true
+    : !enableLxcfsRaw.Equals("false", StringComparison.OrdinalIgnoreCase)
+        && !enableLxcfsRaw.Equals("0", StringComparison.OrdinalIgnoreCase);
+opts.LxcfsProcDir = Environment.GetEnvironmentVariable("LXCFS_PROC_DIR") ?? opts.LxcfsProcDir;
+
 builder.Services.AddSingleton(opts);
 
 // ---------- 数据库 ----------
@@ -174,6 +183,24 @@ internal sealed class StartupInitializer : IHostedService
         catch (Exception ex)
         {
             _logger.LogError(ex, "初始化名额池失败");
+        }
+
+        // 4. 探测宿主 LXCFS 是否可用
+        if (opts.EnableLxcfs)
+        {
+            opts.LxcfsActuallyEnabled = LxcfsProbe.IsAvailable(opts.LxcfsProcDir);
+            if (opts.LxcfsActuallyEnabled)
+            {
+                _logger.LogInformation("LXCFS 探测成功,新容器将挂载 {Dir} 以隔离 /proc 视图", opts.LxcfsProcDir);
+            }
+            else
+            {
+                _logger.LogWarning("LXCFS 未启用或 {Dir} 不可用,容器内 /proc 将看到宿主真实资源(降级运行)", opts.LxcfsProcDir);
+            }
+        }
+        else
+        {
+            _logger.LogInformation("LXCFS 已被 ENABLE_LXCFS=false 关闭");
         }
     }
 

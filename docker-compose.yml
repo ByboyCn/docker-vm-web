@@ -12,6 +12,8 @@ services:
       - ./data:/data
       # Alpine SSH 镜像源,启动时自动 build
       - ./image:/app/image:ro
+      # 宿主 LXCFS proc 目录(让子容器 /proc 看到的是实际配额)。宿主没装 lxcfs 时此挂载只是空目录,后端会自动降级。
+      - /var/lib/lxcfs/proc:/var/lib/lxcfs/proc:ro
     ports:
       - "5000:5000"
     env_file: .env

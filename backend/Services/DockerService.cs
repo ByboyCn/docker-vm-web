@@ -66,6 +66,24 @@ public class DockerService : IDockerService
                 {
                     ["size"] = _opts.VmDiskSize,
                 },
+
+                // ---------- LXCFS(可选,让容器内 /proc 反映实际配额)----------
+                // 仅在宿主 lxcfs 可用时挂载;否则保持空,容器内 /proc 看到的是宿主真实资源
+                Binds = _opts.LxcfsActuallyEnabled
+                    ? new List<string>
+                    {
+                        $"{_opts.LxcfsProcDir}/meminfo:/proc/meminfo:ro",
+                        $"{_opts.LxcfsProcDir}/cpuinfo:/proc/cpuinfo:ro",
+                        $"{_opts.LxcfsProcDir}/loadavg:/proc/loadavg:ro",
+                        $"{_opts.LxcfsProcDir}/stat:/proc/stat:ro",
+                        $"{_opts.LxcfsProcDir}/uptime:/proc/uptime:ro",
+                        $"{_opts.LxcfsProcDir}/diskstats:/proc/diskstats:ro",
+                        $"{_opts.LxcfsProcDir}/swaps:/proc/swaps:ro",
+                    }
+                    : null,
+
+                // ---------- 安全:容器内非 root 拿不到真实宿主信息 ----------
+                ReadonlyRootfs = false,   // true 会破坏 sshd 写 host key,保持 false
             },
             Labels = new Dictionary<string, string>
             {
