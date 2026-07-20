@@ -24,6 +24,28 @@ export interface UserDto {
   isAdmin: boolean
 }
 
+export interface UserQuotaDto {
+  remaining: number
+  globalRemaining: number
+  globalTotal: number
+  globalUsed: number
+  bonus: number
+}
+
+export interface AdminQuotaDto {
+  total: number
+  used: number
+  remaining: number
+  updatedAt: string
+  userBonuses: Array<{
+    userId: string
+    username: string
+    bonus: number
+    note: string
+    updatedAt: string
+  }>
+}
+
 // ---------- 当前用户(localStorage 缓存,真正鉴权靠后端 cookie) ----------
 const USER_KEY = 'docker-vm-user'
 
@@ -109,7 +131,21 @@ export const api = {
   adminCleanup: () => http.post<{ ok: boolean; removed: string[] }>('/admin/cleanup-orphans').then(r => r.data),
 
   adminUsers: () =>
-    http.get<{ items: Array<{ Id: string; Username: string; IsAdmin: boolean; CreatedAt: string; containerCount: number }> }>('/admin/users').then(r => r.data),
+    http.get<{ items: Array<{ Id: string; Username: string; IsAdmin: boolean; CreatedAt: string; containerCount: number; bonus: number }> }>('/admin/users').then(r => r.data),
+
+  // ---------- quota ----------
+  getMyQuota: () => http.get<UserQuotaDto>('/quota').then(r => r.data),
+
+  adminGetQuota: () => http.get<AdminQuotaDto>('/admin/quota').then(r => r.data),
+
+  adminSetQuota: (total: number, used?: number) =>
+    http.put('/admin/quota', { total, used }).then(r => r.data),
+
+  adminResetQuota: (total: number) =>
+    http.post('/admin/quota/reset', { total }).then(r => r.data),
+
+  adminSetUserBonus: (userId: string, bonus: number, note = '') =>
+    http.post(`/admin/quota/users/${userId}/bonus`, { bonus, note }).then(r => r.data),
 }
 
 // 把 axios 实例也导出,供拦截器外使用

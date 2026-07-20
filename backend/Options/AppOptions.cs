@@ -34,4 +34,23 @@ public class AppOptions
 
     /// <summary>允许跨域的来源(逗号分隔),默认 *。</summary>
     public string CorsOrigins { get; set; } = "*";
+
+    // ---------- 容器资源限制 ----------
+
+    /// <summary>每台容器 CPU 核数(可小数)。</summary>
+    public double VmCpuCores { get; set; } = 1.0;
+
+    /// <summary>每台容器内存上限(MB)。</summary>
+    public int VmMemoryMB { get; set; } = 1024;
+
+    /// <summary>每台容器进程/线程数上限。</summary>
+    public long VmPidsLimit { get; set; } = 200;
+
+    /// <summary>每台容器磁盘配额(如 "5g")。依赖宿主 xfs/ext4 quota,不生效时不报错。</summary>
+    public string VmDiskSize { get; set; } = "5g";
+
+    // ---------- 名额池 ----------
+
+    /// <summary>首启初始化的全局名额总额度。</summary>
+    public int QuotaInitialTotal { get; set; } = 5;
 }

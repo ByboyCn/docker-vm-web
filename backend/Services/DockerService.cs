@@ -53,7 +53,19 @@ public class DockerService : IDockerService
                     },
                 },
                 RestartPolicy = new RestartPolicy { Name = RestartPolicyKind.No },
-                Memory = 512L * 1024 * 1024,   // 512 MB 上限,避免单机被一个容器吃满
+
+                // ---------- 资源限制 ----------
+                // CPU:NanoCPUs = 核数 * 1e9(1 核 = 10 亿纳秒)
+                NanoCPUs = (long)(_opts.VmCpuCores * 1_000_000_000),
+                // 内存上限
+                Memory = (long)_opts.VmMemoryMB * 1024 * 1024,
+                // 进程/线程数上限,防 fork 炸弹
+                PidsLimit = _opts.VmPidsLimit,
+                // 磁盘配额(依赖宿主 xfs/ext4 quota + overlay2,不生效时不报错)
+                StorageOpt = new Dictionary<string, string>
+                {
+                    ["size"] = _opts.VmDiskSize,
+                },
             },
             Labels = new Dictionary<string, string>
             {

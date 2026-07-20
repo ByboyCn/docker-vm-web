@@ -14,6 +14,10 @@ public class VmContainer
     [MaxLength(64)]
     public string UserId { get; set; } = string.Empty;
 
+    /// <summary>本机消耗的名额来源:"global"(全局池) 或 "bonus"(用户加量)。仅记录,销毁不退。</summary>
+    [MaxLength(16)]
+    public string ConsumedFrom { get; set; } = "global";
+
     /// <summary>Docker 容器 ID。</summary>
     public string ContainerId { get; set; } = string.Empty;
 

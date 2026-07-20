@@ -1,10 +1,10 @@
 <script setup lang="ts">
-import { h, onMounted, ref } from 'vue'
+import { computed, h, onMounted, ref } from 'vue'
 import {
-  NCard, NButton, NDataTable, NTag, NSpace, NPopconfirm, NEmpty, useMessage,
+  NCard, NButton, NDataTable, NTag, NSpace, NPopconfirm, NEmpty, NStatistic, useMessage,
 } from 'naive-ui'
 import type { DataTableColumns } from 'naive-ui'
-import { api, type VmDto } from '../api'
+import { api, type VmDto, type UserQuotaDto } from '../api'
 import ConnectionDialog from '../components/ConnectionDialog.vue'
 
 const msg = useMessage()
@@ -13,6 +13,25 @@ const loading = ref(false)
 const list = ref<VmDto[]>([])
 const dialogShow = ref(false)
 const currentVm = ref<VmDto | null>(null)
+const quota = ref<UserQuotaDto | null>(null)
+
+const quotaText = computed(() => {
+  if (!quota.value) return ''
+  const { remaining, globalTotal, globalUsed, bonus } = quota.value
+  if (bonus > 0)
+    return `剩余 ${remaining} 台(全局 ${Math.max(0, globalTotal - globalUsed)}/${globalTotal} + 个人加量 ${bonus})`
+  return `剩余 ${remaining} 台(共 ${globalTotal} 台,已用 ${globalUsed})`
+})
+
+const hasQuota = computed(() => (quota.value?.remaining ?? 0) > 0)
+
+async function refreshQuota() {
+  try {
+    quota.value = await api.getMyQuota()
+  } catch (e: any) {
+    // 忽略,quota 非关键
+  }
+}
 
 async function refresh() {
   try {
@@ -23,22 +42,32 @@ async function refresh() {
 }
 
 async function create() {
+  if (!hasQuota.value) {
+    msg.error('今日名额已用完,请等管理员放出新名额')
+    return
+  }
   loading.value = true
   try {
     const vm = await api.createVm()
     currentVm.value = vm
     dialogShow.value = true
     msg.success('虚拟机创建成功')
-    await refresh()
+    await Promise.all([refresh(), refreshQuota()])
   } catch (e: any) {
-    msg.error('创建失败:' + (e?.response?.data?.error ?? e?.message ?? ''))
+    const status = e?.response?.status
+    const errMsg = e?.response?.data?.error ?? e?.message ?? ''
+    if (status === 409) {
+      msg.error(errMsg || '今日名额已用完')
+      refreshQuota()
+    } else {
+      msg.error('创建失败:' + errMsg)
+    }
   } finally {
     loading.value = false
   }
 }
 
 async function reconnect(vm: VmDto) {
-  // 刷新一下最新状态再弹
   try {
     currentVm.value = await api.getVm(vm.key)
   } catch {
@@ -102,7 +131,10 @@ const columns: DataTableColumns<VmDto> = [
   },
 ]
 
-onMounted(refresh)
+onMounted(() => {
+  refresh()
+  refreshQuota()
+})
 </script>
 
 <template>
@@ -112,11 +144,16 @@ onMounted(refresh)
         <div class="hero-text">
           <h2>点击下方按钮,立刻获得一台 Docker SSH 虚拟机</h2>
           <p class="hint">基于 Alpine · 预装常用工具 · 不持久化 · 销毁即清理</p>
+          <div class="quota-line" :class="{ 'no-quota': !hasQuota }">
+            <span v-if="quota">{{ quotaText }}</span>
+            <span v-else class="loading">加载名额...</span>
+          </div>
         </div>
         <n-button
           type="primary"
           size="large"
           :loading="loading"
+          :disabled="!hasQuota"
           @click="create"
           class="big-btn"
         >
@@ -158,6 +195,23 @@ onMounted(refresh)
 }
 .hero-text h2 { margin: 0 0 8px; font-size: 20px; color: #fff; }
 .hint { margin: 0; color: rgba(255,255,255,0.85); font-size: 13px; }
+.quota-line {
+  margin-top: 12px;
+  padding: 6px 12px;
+  background: rgba(255, 255, 255, 0.2);
+  border-radius: 6px;
+  display: inline-block;
+  font-size: 14px;
+  color: #fff;
+  font-weight: 500;
+}
+.quota-line.no-quota {
+  background: rgba(255, 80, 80, 0.4);
+}
+.quota-line.loading {
+  font-weight: normal;
+  opacity: 0.8;
+}
 .big-btn {
   font-size: 16px !important;
   height: 48px !important;

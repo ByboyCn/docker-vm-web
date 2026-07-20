@@ -19,6 +19,7 @@ public static class VmEndpoints
             AppDbContext db,
             IDockerService docker,
             PortAllocator ports,
+            QuotaService quota,
             AppOptions opts,
             CancellationToken ct) =>
         {
@@ -27,11 +28,33 @@ public static class VmEndpoints
                 return Results.Json(new { error = "未登录或会话已过期" }, statusCode: 401);
             }
 
+            // 1. 扣减名额(事务化)。失败直接 409
+            string consumedFrom;
+            try
+            {
+                consumedFrom = await quota.TryConsumeAsync(user!.Id, ct);
+            }
+            catch (QuotaExceededException)
+            {
+                return Results.Json(new { error = "今日名额已用完" }, statusCode: 409);
+            }
+
+            // 2. 创建 docker 容器
             var ip = HostIpDetector.Detect(opts.HostIp);
             var key = Guid.NewGuid().ToString("N");
             var username = opts.SshUser;
             var password = PasswordGenerator.Generate(16);
-            var port = await ports.AllocateAsync(ct);
+
+            int port;
+            try
+            {
+                port = await ports.AllocateAsync(ct);
+            }
+            catch (Exception ex)
+            {
+                await quota.RefundAsync(user!.Id, consumedFrom, ct);
+                return Results.Json(new { error = "端口分配失败:" + ex.Message }, statusCode: 503);
+            }
 
             VmContainer container;
             try
@@ -40,10 +63,13 @@ public static class VmEndpoints
             }
             catch (Exception ex)
             {
+                // docker 创建失败,退还名额
+                await quota.RefundAsync(user!.Id, consumedFrom, ct);
                 return Results.Json(new { error = "容器创建失败:" + ex.Message }, statusCode: 500);
             }
 
             container.UserId = user!.Id;
+            container.ConsumedFrom = consumedFrom;
             db.Containers.Add(container);
             await db.SaveChangesAsync(ct);
 

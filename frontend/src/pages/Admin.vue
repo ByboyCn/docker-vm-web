@@ -1,31 +1,48 @@
 <script setup lang="ts">
-import { h, onMounted, ref } from 'vue'
+import { computed, h, onMounted, ref } from 'vue'
 import {
   NCard, NButton, NDataTable, NTag, NSpace, NPopconfirm, NEmpty, NStatistic,
-  NGrid, NGi, NTabs, NTabPane, useMessage,
+  NGrid, NGi, NTabs, NTabPane, NInput, NInputGroup, NInputNumber, NModal, NForm,
+  NFormItem, useMessage,
 } from 'naive-ui'
 import type { DataTableColumns } from 'naive-ui'
-import { api, type VmDto } from '../api'
+import { api, type VmDto, type AdminQuotaDto } from '../api'
 
 const msg = useMessage()
 
-const tab = ref<'containers' | 'users'>('containers')
+const tab = ref<'containers' | 'users' | 'quota'>('quota')
 
+// ---------- 容器 ----------
 const list = ref<VmDto[]>([])
 const total = ref(0)
 const running = ref(0)
 const loading = ref(false)
 
-const users = ref<Array<{ Id: string; Username: string; IsAdmin: boolean; CreatedAt: string; containerCount: number }>>([])
+// ---------- 用户 ----------
+const users = ref<Array<{ Id: string; Username: string; IsAdmin: boolean; CreatedAt: string; containerCount: number; bonus: number }>>([])
+
+// ---------- 名额 ----------
+const quota = ref<AdminQuotaDto | null>(null)
+const editTotal = ref<number>(5)
+const resetTotal = ref<number>(5)
+
+// 编辑 bonus 的弹窗
+const bonusModalShow = ref(false)
+const editingUser = ref<{ id: string; name: string } | null>(null)
+const editBonusValue = ref<number>(0)
+const editBonusNote = ref<string>('')
 
 async function refresh() {
   loading.value = true
   try {
-    const [c, u] = await Promise.all([api.adminList(), api.adminUsers()])
+    const [c, u, q] = await Promise.all([api.adminList(), api.adminUsers(), api.adminGetQuota()])
     list.value = c.items
     total.value = c.total
     running.value = c.running
     users.value = u.items
+    quota.value = q
+    editTotal.value = q.total
+    resetTotal.value = q.total
   } catch (e: any) {
     if (e?.response?.status === 403) {
       msg.error('只有管理员可以访问后台')
@@ -57,6 +74,49 @@ async function cleanupOrphans() {
   }
 }
 
+// ---------- 名额操作 ----------
+async function saveTotal() {
+  try {
+    await api.adminSetQuota(editTotal.value)
+    msg.success(`总额度已设为 ${editTotal.value}`)
+    await refresh()
+  } catch (e: any) {
+    msg.error('设置失败:' + (e?.response?.data?.error ?? e?.message ?? ''))
+  }
+}
+
+async function resetQuota() {
+  try {
+    await api.adminResetQuota(resetTotal.value)
+    msg.success(`名额已重置:总额 ${resetTotal.value},已用清零`)
+    await refresh()
+  } catch (e: any) {
+    msg.error('重置失败:' + (e?.response?.data?.error ?? e?.message ?? ''))
+  }
+}
+
+function openBonusModal(row: { Id: string; Username: string; bonus: number }) {
+  editingUser.value = { id: row.Id, name: row.Username }
+  editBonusValue.value = row.bonus
+  // 找原有备注
+  const item = quota.value?.userBonuses.find(u => u.userId === row.Id)
+  editBonusNote.value = item?.note ?? ''
+  bonusModalShow.value = true
+}
+
+async function saveBonus() {
+  if (!editingUser.value) return
+  try {
+    await api.adminSetUserBonus(editingUser.value.id, editBonusValue.value, editBonusNote.value)
+    msg.success(`${editingUser.value.name} 的加量已设为 ${editBonusValue.value}`)
+    bonusModalShow.value = false
+    await refresh()
+  } catch (e: any) {
+    msg.error('设置失败:' + (e?.response?.data?.error ?? e?.message ?? ''))
+  }
+}
+
+// ---------- 工具 ----------
 function statusType(s: string): 'success' | 'warning' | 'error' | 'default' {
   if (s === 'running') return 'success'
   if (s === 'exited') return 'warning'
@@ -99,7 +159,7 @@ const containerColumns: DataTableColumns<VmDto> = [
   },
 ]
 
-const userColumns = [
+const userColumns = computed<DataTableColumns<any>>(() => [
   { title: '用户名', key: 'Username' },
   {
     title: '角色',
@@ -110,8 +170,15 @@ const userColumns = [
         : h(NTag, { size: 'small', round: true }, () => 'user'),
   },
   { title: '容器数', key: 'containerCount' },
+  {
+    title: '个人加量',
+    key: 'bonus',
+    render: (r: any) =>
+      h(NButton, { size: 'small', tertiary: true, onClick: () => openBonusModal(r) },
+        () => r.bonus > 0 ? `${r.bonus} 台 (点击编辑)` : '0 (点击设置)'),
+  },
   { title: '注册时间', key: 'CreatedAt', render: (r: any) => fmtTime(r.CreatedAt) },
-]
+])
 
 onMounted(refresh)
 </script>
@@ -126,18 +193,70 @@ onMounted(refresh)
         </n-space>
       </template>
 
-      <n-grid :cols="2" :x-gap="16">
+      <n-grid :cols="3" :x-gap="16">
         <n-gi>
           <n-statistic label="容器总数" :value="total" />
         </n-gi>
         <n-gi>
           <n-statistic label="运行中" :value="running" />
         </n-gi>
+        <n-gi>
+          <n-statistic label="剩余名额" :value="quota?.remaining ?? 0" />
+        </n-gi>
       </n-grid>
     </n-card>
 
     <n-card size="large" :bordered="false">
       <n-tabs v-model:value="tab" type="line" animated>
+        <!-- 名额管理 -->
+        <n-tab-pane name="quota" tab="名额管理">
+          <div v-if="quota" class="quota-panel">
+            <n-card title="全局名额池" size="medium" :bordered="true" class="sub-card">
+              <n-space align="center" :size="24">
+                <n-statistic label="总额度" :value="quota.total" />
+                <n-statistic label="已消耗" :value="quota.used" />
+                <n-statistic label="剩余" :value="quota.remaining" />
+              </n-space>
+              <p class="tip">说明:用户开机器时优先消耗全局池,池空了再消耗"个人加量"。销毁不退名额。</p>
+
+              <n-space align="center" :size="12" style="margin-top: 16px;">
+                <n-input-group>
+                  <n-input-number v-model:value="editTotal" :min="0" :max="10000" />
+                  <n-button type="primary" @click="saveTotal">修改总额度</n-button>
+                </n-input-group>
+                <span class="or">或</span>
+                <n-input-group>
+                  <n-input-number v-model:value="resetTotal" :min="0" :max="10000" />
+                  <n-popconfirm @positive-click="resetQuota">
+                    <template #trigger>
+                      <n-button type="warning">一键重置(已用清零)</n-button>
+                    </template>
+                    确定重置吗?所有"已消耗"会归零,总额度变为 {{ resetTotal }}。
+                  </n-popconfirm>
+                </n-input-group>
+              </n-space>
+            </n-card>
+
+            <n-card title="已发放个人加量" size="medium" :bordered="true" class="sub-card">
+              <n-data-table
+                v-if="quota.userBonuses.length > 0"
+                :columns="[
+                  { title: '用户名', key: 'username' },
+                  { title: '加量数', key: 'bonus' },
+                  { title: '备注', key: 'note' },
+                  { title: '更新时间', key: 'updatedAt', render: (r: any) => fmtTime(r.updatedAt) },
+                ]"
+                :data="quota.userBonuses"
+                :bordered="false"
+                :pagination="false"
+              />
+              <n-empty v-else description="还没有给任何用户发放额外加量" style="padding: 24px 0;" />
+              <p class="tip">在下方"用户"Tab 里可以为每个用户单独设置加量。</p>
+            </n-card>
+          </div>
+        </n-tab-pane>
+
+        <!-- 所有容器 -->
         <n-tab-pane name="containers" tab="所有容器">
           <n-data-table
             v-if="list.length > 0"
@@ -149,6 +268,7 @@ onMounted(refresh)
           <n-empty v-else description="暂无容器" style="padding: 40px 0;" />
         </n-tab-pane>
 
+        <!-- 用户 -->
         <n-tab-pane name="users" tab="用户">
           <n-data-table
             v-if="users.length > 0"
@@ -162,4 +282,42 @@ onMounted(refresh)
       </n-tabs>
     </n-card>
   </n-space>
+
+  <!-- 编辑 bonus 弹窗 -->
+  <n-modal
+    v-model:show="bonusModalShow"
+    :auto-focus="false"
+  >
+    <n-card
+      style="width: 420px; max-width: 92vw;"
+      :title="`设置 ${editingUser?.name} 的个人加量`"
+      :bordered="false"
+      size="large"
+      role="dialog"
+      aria-modal="true"
+    >
+      <n-form>
+        <n-form-item label="加量数量">
+          <n-input-number v-model:value="editBonusValue" :min="0" :max="100" style="width: 100%;" />
+        </n-form-item>
+        <n-form-item label="备注(可选)">
+          <n-input v-model:value="editBonusNote" placeholder="例如:朋友、特殊申请" />
+        </n-form-item>
+      </n-form>
+      <p class="tip">个人加量只对该用户有效。全局池耗尽时,该用户仍可用个人加量开机器。</p>
+      <template #footer>
+        <n-space justify="end">
+          <n-button @click="bonusModalShow = false">取消</n-button>
+          <n-button type="primary" @click="saveBonus">保存</n-button>
+        </n-space>
+      </template>
+    </n-card>
+  </n-modal>
 </template>
+
+<style scoped>
+.quota-panel { display: flex; flex-direction: column; gap: 16px; }
+.sub-card { background: #fafbfc; }
+.tip { margin: 8px 0 0; font-size: 12px; color: #86909c; line-height: 1.6; }
+.or { color: #86909c; font-size: 13px; }
+</style>

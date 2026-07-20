@@ -8,6 +8,8 @@ public class AppDbContext : DbContext
     public DbSet<VmContainer> Containers => Set<VmContainer>();
     public DbSet<User> Users => Set<User>();
     public DbSet<Session> Sessions => Set<Session>();
+    public DbSet<QuotaState> QuotaStates => Set<QuotaState>();
+    public DbSet<UserQuotaBonus> UserQuotaBonuses => Set<UserQuotaBonus>();
 
     public AppDbContext(DbContextOptions<AppDbContext> options) : base(options)
     {
@@ -42,6 +44,18 @@ public class AppDbContext : DbContext
             e.HasIndex(x => x.ExpiresAt);  // 便于后续按过期清理
             e.Property(x => x.Id).HasMaxLength(64);
             e.Property(x => x.UserId).HasMaxLength(64);
+        });
+
+        modelBuilder.Entity<QuotaState>(e =>
+        {
+            e.HasKey(x => x.Id);
+        });
+
+        modelBuilder.Entity<UserQuotaBonus>(e =>
+        {
+            e.HasKey(x => x.UserId);
+            e.Property(x => x.UserId).HasMaxLength(64);
+            e.Property(x => x.Note).HasMaxLength(128);
         });
     }
 }

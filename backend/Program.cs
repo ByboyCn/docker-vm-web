@@ -25,6 +25,17 @@ opts.SshImageName = Environment.GetEnvironmentVariable("SSH_IMAGE_NAME") ?? opts
 opts.SshImageContextDir = Environment.GetEnvironmentVariable("SSH_IMAGE_CONTEXT_DIR") ?? opts.SshImageContextDir;
 opts.CorsOrigins = Environment.GetEnvironmentVariable("CORS_ORIGINS") ?? opts.CorsOrigins;
 
+// ---------- 资源/名额配置 ----------
+_ = double.TryParse(Environment.GetEnvironmentVariable("VM_CPU_CORES"), out var cpuCores) ? cpuCores : opts.VmCpuCores;
+opts.VmCpuCores = cpuCores;
+_ = int.TryParse(Environment.GetEnvironmentVariable("VM_MEMORY_MB"), out var memMb) ? memMb : opts.VmMemoryMB;
+opts.VmMemoryMB = memMb;
+_ = long.TryParse(Environment.GetEnvironmentVariable("VM_PIDS_LIMIT"), out var pidsLimit) ? pidsLimit : opts.VmPidsLimit;
+opts.VmPidsLimit = pidsLimit;
+opts.VmDiskSize = Environment.GetEnvironmentVariable("VM_DISK_SIZE") ?? opts.VmDiskSize;
+_ = int.TryParse(Environment.GetEnvironmentVariable("QUOTA_INITIAL_TOTAL"), out var qInit) ? qInit : opts.QuotaInitialTotal;
+opts.QuotaInitialTotal = qInit;
+
 builder.Services.AddSingleton(opts);
 
 // ---------- 数据库 ----------
@@ -48,6 +59,7 @@ builder.Services.AddSingleton<IDockerClient>(_ =>
 
 builder.Services.AddHttpContextAccessor();
 builder.Services.AddScoped<AuthService>();
+builder.Services.AddScoped<QuotaService>();
 builder.Services.AddScoped<PortAllocator>(sp => new PortAllocator(
     sp.GetRequiredService<AppDbContext>(), opts.PortMin, opts.PortMax));
 builder.Services.AddScoped<IDockerService, DockerService>();
@@ -94,6 +106,7 @@ app.MapGet("/api/health", () => Results.Ok(new { ok = true }));
 
 app.MapAuthEndpoints();
 app.MapVmEndpoints();
+app.MapQuotaEndpoints();
 app.MapAdminEndpoints();
 
 app.Run();
@@ -150,6 +163,17 @@ internal sealed class StartupInitializer : IHostedService
         catch (Exception ex)
         {
             _logger.LogError(ex, "创建初始管理员失败");
+        }
+
+        // 3. 初始化全局名额池
+        try
+        {
+            var quota = sp.GetRequiredService<QuotaService>();
+            await quota.EnsureInitializedAsync(opts.QuotaInitialTotal, cancellationToken);
+        }
+        catch (Exception ex)
+        {
+            _logger.LogError(ex, "初始化名额池失败");
         }
     }
 

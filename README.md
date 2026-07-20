@@ -21,10 +21,23 @@
 - 查看我的容器列表、自助销毁
 
 **管理后台**(`/admin`,需登录且 `IsAdmin=true`):
+- **名额管理**:设置全局名额池总数 / 一键重置已用数 / 给指定用户加额外名额
 - 查看所有容器(总数 / 运行中)
-- 查看所有用户(用户名 / 角色 / 容器数)
+- 查看所有用户(用户名 / 角色 / 容器数 / 个人加量)
 - 强制销毁任意容器
 - 清理孤儿记录(数据库有记录但 Docker 已删除的)
+
+**名额限量**:
+- admin 设置全局名额池(如 5)。所有用户共享,开一台扣 1
+- 名额用完,用户开机器会返回 409,前端显示"今日名额已用完"
+- admin 可以给指定用户额外加名额(全局池空了该用户仍能开)
+- 名额只在 admin 手动重置时归零,**销毁容器不退名额**(避免反复刷)
+
+**容器资源限制**(每台):
+- CPU 1 核(`VM_CPU_CORES`)
+- 内存 1G(`VM_MEMORY_MB`)
+- 进程数 200(`VM_PIDS_LIMIT`,防 fork 炸弹)
+- 磁盘 5G(`VM_DISK_SIZE`,**依赖宿主配额,见下文**)
 
 **容器内环境**(Alpine 基础镜像):
 - OpenSSH / bash / curl / wget / git / vim / nano
@@ -133,6 +146,11 @@ curl -I http://vm.byboy.cc/api/health
 | `SSH_IMAGE_CONTEXT_DIR` | `/app/image` | 镜像构建目录(容器内路径) |
 | `CORS_ORIGINS` | `*` | 跨域来源,逗号分隔 |
 | `DOCKER_HOST` | `unix:///var/run/docker.sock` | Docker daemon 地址 |
+| `VM_CPU_CORES` | `1` | 每台容器 CPU 核数(可小数) |
+| `VM_MEMORY_MB` | `1024` | 每台容器内存上限(MB) |
+| `VM_PIDS_LIMIT` | `200` | 每台容器进程/线程数上限 |
+| `VM_DISK_SIZE` | `5g` | 每台容器磁盘配额(依赖宿主,见下文) |
+| `QUOTA_INITIAL_TOTAL` | `5` | 首启初始化的全局名额总数(之后由 admin 管理) |
 
 > `ADMIN_TOKEN` 配置项已废弃(向后兼容保留),新版管理后台改用登录账号的 `IsAdmin` 判断。
 
@@ -229,6 +247,48 @@ npm run dev    # 监听 http://localhost:5173,/api 自动代理到 5000
 4. **端口范围暴露**:容器端口(`PORT_MIN`-`PORT_MAX`)需要对外开放,云服务器请在安全组精确放行,不要开 `0-65535`。
 5. **SSH 密码明文存储**:为支持"再次查看连接信息",容器 SSH 密码在 SQLite 中**明文存储**。如果担心,可改 `backend/Endpoints/VmEndpoints.cs` 删除返回与存储。
 6. **Cookie 安全**:session cookie 是 `HttpOnly + SameSite=Strict`,HTTPS 环境下自动加 `Secure`。生产请配 HTTPS(在 nginx 前加反代或证书)。
+
+---
+
+## 💿 磁盘配额说明(重要)
+
+`VM_DISK_SIZE=5g` 通过 docker 的 `--storage-opt size=5g` 实现,但**它依赖宿主机文件系统支持**,不是开箱即用。
+
+**生效条件**(满足其一):
+- 宿主 `/var/lib/docker` 所在文件系统是 **XFS**,且挂载时带了 `pquota` 选项
+- 或文件系统是 **ext4**,且启用了 quota
+- 且 docker storage driver 是 `overlay2`
+
+**怎么验证是否生效**:
+```bash
+docker run --rm --storage-opt size=5g alpine df -h /
+# 看 / 这一行的 Size:如果是 5G → 生效;如果是宿主磁盘大小 → 没生效
+```
+
+**没生效怎么办**:
+- 容器仍能正常开,只是磁盘没限制(用户能写满宿主磁盘)
+- 想真正生效,需要在宿主上重新配置 docker:`/etc/docker/daemon.json` 加 `"storage-opts": ["overlay2.override_kernel_check=true"]`,并把 `/var/lib/docker` 重新挂为带 quota 的 XFS。这是个有风险的运维操作,建议在装系统时就规划好。
+- 折中方案:CPU/内存/PID 限制是肯定生效的,磁盘只靠"用户自觉 + 销毁回收"间接管控。
+
+**怎么修改资源限制**:
+改 `.env` 里的 `VM_CPU_CORES` / `VM_MEMORY_MB` / `VM_PIDS_LIMIT` / `VM_DISK_SIZE`,然后:
+```bash
+docker compose up -d      # 不用 --build,只重启
+```
+> ⚠️ 已开出来的容器**不会**应用新配置,只对之后新开的容器生效。
+
+---
+
+## 🎫 名额管理流程
+
+1. **首次启动**:数据库初始化全局名额池为 `QUOTA_INITIAL_TOTAL`(默认 5)
+2. **admin 登录后台** → "名额管理" Tab:
+   - 看到 `总额度 / 已消耗 / 剩余`
+   - 点"修改总额度"改 `Total`(已用不变,剩余 = 新 Total - 已用)
+   - 点"一键重置"把已用归零(可选同时改 Total)
+3. **给某用户加量**:"用户" Tab → 对应用户行"个人加量"列 → 点击设置数量和备注
+4. **用户开机器**:优先消耗全局池,全局空了才消耗个人加量
+5. **销毁容器不退名额**(防刷)—— 如需改成"销毁退还",改 `backend/Services/QuotaService.cs` 注释里那一行
 
 ---
 
