@@ -3,5 +3,4 @@ obj/
 .vs/
 *.user
 *.suo
-data/
-*.db
+**/*.db
