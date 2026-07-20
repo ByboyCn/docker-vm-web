@@ -57,25 +57,18 @@ public static class VmEndpoints
                 return Results.Json(new { error = "端口分配失败:" + ex.Message }, statusCode: 503);
             }
 
-            // 3. 准备 loop 卷(磁盘配额主防线)
-            try
-            {
-                await diskQuota.PrepareVolumeAsync(key, ct);
-            }
-            catch (Exception ex)
-            {
-                await quota.RefundAsync(user!.Id, consumedFrom, ct);
-                return Results.Json(new { error = "磁盘卷创建失败:" + ex.Message }, statusCode: 500);
-            }
+            // 3. (已废弃)曾经在此创建 loop 文件挂 /home 限磁盘,
+            //    但 docker 不支持 bind 文件→目录。磁盘配额改回 storage-opt + 后台扫描兜底。
+            //    此处保留 diskQuota 注入只是为了销毁时清理可能的历史残留 img 文件。
 
             VmContainer container;
             try
             {
-                container = await docker.CreateContainerAsync(key, port, username, password, diskQuota, ct);
+                container = await docker.CreateContainerAsync(key, port, username, password, ct);
             }
             catch (Exception ex)
             {
-                // docker 创建失败,退还名额 + 删 loop 卷
+                // docker 创建失败,退还名额
                 await diskQuota.RemoveVolumeAsync(key, ct);
                 await quota.RefundAsync(user!.Id, consumedFrom, ct);
                 return Results.Json(new { error = "容器创建失败:" + ex.Message }, statusCode: 500);

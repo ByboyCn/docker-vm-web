@@ -11,7 +11,6 @@ public interface IDockerService
         int hostPort,
         string username,
         string password,
-        DiskQuotaService diskQuota,
         CancellationToken ct = default);
 
     /// <summary>启动已停止的容器。</summary>
