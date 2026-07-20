@@ -149,7 +149,11 @@ curl -I http://vm.byboy.cc/api/health
 | `VM_CPU_CORES` | `1` | 每台容器 CPU 核数(可小数) |
 | `VM_MEMORY_MB` | `1024` | 每台容器内存上限(MB) |
 | `VM_PIDS_LIMIT` | `200` | 每台容器进程/线程数上限 |
-| `VM_DISK_SIZE` | `5g` | 每台容器磁盘配额(依赖宿主,见下文) |
+| `VM_DISK_SIZE` | `5g` | 每台容器 `/home` 的 loop 文件大小(硬限制) |
+| `VM_DISK_ALERT` | `6g` | 后台扫描告警阈值(容器可写层总大小) |
+| `VM_DISK_SCAN_MINUTES` | `10` | 后台扫描间隔 |
+| `VM_VOLUME_DIR` | `/var/lib/docker-vm-volumes` | loop 文件目录 |
+| `DOCKER_OVERLAY_DIR` | `/var/lib/docker/overlay2` | docker overlay2 目录(扫描用) |
 | `QUOTA_INITIAL_TOTAL` | `5` | 首启初始化的全局名额总数(之后由 admin 管理) |
 | `ENABLE_LXCFS` | `true` | 是否启用 LXCFS(/proc 视图隔离,见下文) |
 | `LXCFS_PROC_DIR` | `/var/lib/lxcfs/proc` | 宿主 lxcfs 的 proc 目录路径 |
@@ -252,32 +256,58 @@ npm run dev    # 监听 http://localhost:5173,/api 自动代理到 5000
 
 ---
 
-## 💿 磁盘配额说明(重要)
+## 💿 磁盘配额说明(双层防线)
 
-`VM_DISK_SIZE=5g` 通过 docker 的 `--storage-opt size=5g` 实现,但**它依赖宿主机文件系统支持**,不是开箱即用。
+磁盘限制用**两层策略**保证:
 
-**生效条件**(满足其一):
-- 宿主 `/var/lib/docker` 所在文件系统是 **XFS**,且挂载时带了 `pquota` 选项
-- 或文件系统是 **ext4**,且启用了 quota
-- 且 docker storage driver 是 `overlay2`
+### 主防线:loop 文件挂 `/home`(系统级硬限制)
 
-**怎么验证是否生效**:
+每开一台机器,后端在宿主 `/var/lib/docker-vm-volumes/{key}.img` 创建一个 5G 稀疏文件,格式化 ext4,bind 到容器的 `/home`。用户写代码、下载数据、家目录里的任何东西都受这 5G **系统级强制限制**(写到 5G 报 `ENOSPC` 错误)。
+
+- ✅ **不依赖宿主 xfs quota / ext4 quota**,ext4 默认配置也能用
+- ✅ 稀疏文件,实际占用 = 用户用多少
+- ✅ 销毁容器时自动删 loop 文件
+- ⚠️ 只限 `/home`(用户主目录)。`/tmp`、`/var/cache`、`apt install` 装到 `/usr` 等不在限制内 —— 由下一层兜底
+
+**怎么验证**:
 ```bash
-docker run --rm --storage-opt size=5g alpine df -h /
-# 看 / 这一行的 Size:如果是 5G → 生效;如果是宿主磁盘大小 → 没生效
+# 进容器后
+df -h /home        # 应该看到 5G
+dd if=/dev/zero of=/home/user/test bs=1M count=6000   # 写 6G,会在 5G 时报 No space left on device
 ```
 
-**没生效怎么办**:
-- 容器仍能正常开,只是磁盘没限制(用户能写满宿主磁盘)
-- 想真正生效,需要在宿主上重新配置 docker:`/etc/docker/daemon.json` 加 `"storage-opts": ["overlay2.override_kernel_check=true"]`,并把 `/var/lib/docker` 重新挂为带 quota 的 XFS。这是个有风险的运维操作,建议在装系统时就规划好。
-- 折中方案:CPU/内存/PID 限制是肯定生效的,磁盘只靠"用户自觉 + 销毁回收"间接管控。
+### 兜底:后台扫描容器可写层
 
-**怎么修改资源限制**:
-改 `.env` 里的 `VM_CPU_CORES` / `VM_MEMORY_MB` / `VM_PIDS_LIMIT` / `VM_DISK_SIZE`,然后:
+后端起一个定时任务(默认每 10 分钟),用 `du` 扫所有容器的 overlay2 可写层(`apt install`、写 `/var`、`/tmp` 等都会落在可写层)。超过 `VM_DISK_ALERT`(默认 6G)的容器:
+- 在 admin 后台"磁盘占用"Tab 标红
+- 后端日志写 warning
+- admin 可手动"强制销毁"
+
+**怎么验证扫描工作**:
+```bash
+# 在容器里塞点东西到 /var(绕过 /home)
+sudo dd if=/dev/zero of=/var/bigfile bs=1M count=100
+
+# 等 10 分钟(或重启 backend 让它立即扫一次)
+# 然后看 admin 后台"磁盘占用"Tab,该容器的占用应该 +100MB
+```
+
+### 配置项
+
+| 变量 | 默认 | 说明 |
+|---|---|---|
+| `VM_DISK_SIZE` | `5g` | loop 文件大小(/home 硬限制) |
+| `VM_DISK_ALERT` | `6g` | 后台扫描告警阈值 |
+| `VM_DISK_SCAN_MINUTES` | `10` | 扫描间隔(分钟) |
+| `VM_VOLUME_DIR` | `/var/lib/docker-vm-volumes` | loop 文件目录(需和 docker-compose 挂载一致) |
+| `DOCKER_OVERLAY_DIR` | `/var/lib/docker/overlay2` | docker overlay2 目录(只读) |
+
+**怎么修改**:
+改 `.env` 后:
 ```bash
 docker compose up -d      # 不用 --build,只重启
 ```
-> ⚠️ 已开出来的容器**不会**应用新配置,只对之后新开的容器生效。
+> ⚠️ 已开出来的容器**不会**应用新 loop 大小,只对之后新开的容器生效。
 
 ---
 

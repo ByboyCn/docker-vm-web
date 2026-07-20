@@ -49,6 +49,7 @@ public static class AdminEndpoints
             HttpContext ctx,
             AppDbContext db,
             IDockerService docker,
+            DiskQuotaService diskQuota,
             CancellationToken ct) =>
         {
             if (!ctx.RequireAdmin(out var _))
@@ -64,6 +65,7 @@ public static class AdminEndpoints
                 return Results.NotFound(new { error = "容器不存在" });
             }
             await docker.RemoveContainerAsync(c.ContainerId, ct);
+            await diskQuota.RemoveVolumeAsync(key, ct);
             db.Containers.Remove(c);
             await db.SaveChangesAsync(ct);
             return Results.Ok(new { ok = true });
@@ -96,6 +98,59 @@ public static class AdminEndpoints
             }
             await db.SaveChangesAsync(ct);
             return Results.Ok(new { ok = true, removed });
+        });
+
+        // 查所有容器的磁盘占用(需管理员)—— 后台扫描兜底
+        grp.MapGet("/disk-usage", async (
+            HttpContext ctx,
+            AppDbContext db,
+            DiskQuotaService diskQuota,
+            IDockerService docker,
+            AppOptions opts,
+            CancellationToken ct) =>
+        {
+            if (!ctx.RequireAdmin(out var _))
+            {
+                return ctx.Response.StatusCode == 401
+                    ? Results.Json(new { error = "未登录或会话已过期" }, statusCode: 401)
+                    : Results.Json(new { error = "需要管理员权限" }, statusCode: 403);
+            }
+
+            // 一次性扫描所有 overlay2 可写层
+            var usageByHash = await diskQuota.ScanContainerDiskUsageAsync(ct);
+
+            var containers = await db.Containers.AsNoTracking().ToListAsync(ct);
+            var userNames = await db.Users.ToDictionaryAsync(u => u.Id, u => u.Username, ct);
+
+            var items = new List<object>();
+            foreach (var c in containers)
+            {
+                // docker container ID 是完整的,overlay2 hash 是它的前缀(sha256:xxx 后面那段)
+                // 找到匹配的可写层
+                var hash = c.ContainerId.StartsWith("sha256:") ? c.ContainerId[7..] : c.ContainerId;
+                long bytes = 0;
+                // overlay2 目录名是完整 container ID
+                if (usageByHash.TryGetValue(c.ContainerId, out var b1)) bytes = b1;
+                else if (usageByHash.TryGetValue(hash, out var b2)) bytes = b2;
+
+                items.Add(new
+                {
+                    key = c.Key,
+                    containerName = c.ContainerName,
+                    username = userNames.GetValueOrDefault(c.UserId, "(已删除)"),
+                    status = await docker.GetStatusAsync(c.ContainerId, ct),
+                    diskUsageBytes = bytes,
+                    diskUsageHuman = FormatBytes(bytes),
+                    overLimit = bytes > opts.DiskAlertBytes,
+                });
+            }
+
+            return Results.Ok(new
+            {
+                threshold = opts.DiskAlertBytes,
+                thresholdHuman = FormatBytes(opts.DiskAlertBytes),
+                items,
+            });
         });
 
         // 列出所有用户(需管理员)
@@ -261,5 +316,16 @@ public static class AdminEndpoints
         });
 
         return app;
+    }
+
+    /// <summary>把字节数格式化为人类可读(KB/MB/GB)。</summary>
+    private static string FormatBytes(long bytes)
+    {
+        if (bytes < 1024) return $"{bytes} B";
+        double v = bytes;
+        string[] units = { "KB", "MB", "GB", "TB" };
+        int i = -1;
+        do { v /= 1024; i++; } while (v >= 1024 && i < units.Length - 1);
+        return $"{v:0.##} {units[i]}";
     }
 }

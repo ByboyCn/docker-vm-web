@@ -33,6 +33,12 @@ opts.VmMemoryMB = memMb;
 _ = long.TryParse(Environment.GetEnvironmentVariable("VM_PIDS_LIMIT"), out var pidsLimit) ? pidsLimit : opts.VmPidsLimit;
 opts.VmPidsLimit = pidsLimit;
 opts.VmDiskSize = Environment.GetEnvironmentVariable("VM_DISK_SIZE") ?? opts.VmDiskSize;
+opts.DiskQuotaBytes = StartupInitializer.ParseDiskSize(Environment.GetEnvironmentVariable("VM_DISK_SIZE"), opts.DiskQuotaBytes);
+opts.DiskAlertBytes = StartupInitializer.ParseDiskSize(Environment.GetEnvironmentVariable("VM_DISK_ALERT"), opts.DiskAlertBytes);
+_ = int.TryParse(Environment.GetEnvironmentVariable("VM_DISK_SCAN_MINUTES"), out var scanMin) ? scanMin : opts.DiskScanIntervalMinutes;
+opts.DiskScanIntervalMinutes = scanMin;
+opts.VolumeDir = Environment.GetEnvironmentVariable("VM_VOLUME_DIR") ?? opts.VolumeDir;
+opts.DockerOverlayDir = Environment.GetEnvironmentVariable("DOCKER_OVERLAY_DIR") ?? opts.DockerOverlayDir;
 _ = int.TryParse(Environment.GetEnvironmentVariable("QUOTA_INITIAL_TOTAL"), out var qInit) ? qInit : opts.QuotaInitialTotal;
 opts.QuotaInitialTotal = qInit;
 
@@ -69,9 +75,11 @@ builder.Services.AddSingleton<IDockerClient>(_ =>
 builder.Services.AddHttpContextAccessor();
 builder.Services.AddScoped<AuthService>();
 builder.Services.AddScoped<QuotaService>();
+builder.Services.AddScoped<DiskQuotaService>();
 builder.Services.AddScoped<PortAllocator>(sp => new PortAllocator(
     sp.GetRequiredService<AppDbContext>(), opts.PortMin, opts.PortMax));
 builder.Services.AddScoped<IDockerService, DockerService>();
+builder.Services.AddHostedService<DiskQuotaScanService>();
 
 builder.Services.AddSingleton<SshImageBuilder>(sp => new SshImageBuilder(
     sp.GetRequiredService<IDockerClient>(),
@@ -205,4 +213,34 @@ internal sealed class StartupInitializer : IHostedService
     }
 
     public Task StopAsync(CancellationToken cancellationToken) => Task.CompletedTask;
+
+    /// <summary>
+    /// 把 "5g" / "512m" / "1073741824" 之类的磁盘大小字符串解析成字节数。
+    /// 失败返回 fallback。
+    /// </summary>
+    public static long ParseDiskSize(string? raw, long fallback)
+    {
+        if (string.IsNullOrWhiteSpace(raw))
+        {
+            return fallback;
+        }
+        raw = raw.Trim().ToLowerInvariant();
+        var match = System.Text.RegularExpressions.Regex.Match(raw, @"^(\d+(?:\.\d+)?)\s*([kmgt]?)b?$");
+        if (!match.Success)
+        {
+            return long.TryParse(raw, out var asBytes) ? asBytes : fallback;
+        }
+        var num = double.Parse(match.Groups[1].Value, System.Globalization.CultureInfo.InvariantCulture);
+        var unit = match.Groups[2].Value;
+        var mult = unit switch
+        {
+            "" => 1L,
+            "k" => 1024L,
+            "m" => 1024L * 1024,
+            "g" => 1024L * 1024 * 1024,
+            "t" => 1024L * 1024 * 1024 * 1024,
+            _ => 1L,
+        };
+        return (long)(num * mult);
+    }
 }

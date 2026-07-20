@@ -10,13 +10,26 @@ import { api, type VmDto, type AdminQuotaDto } from '../api'
 
 const msg = useMessage()
 
-const tab = ref<'containers' | 'users' | 'quota'>('quota')
+const tab = ref<'containers' | 'users' | 'quota' | 'disk'>('quota')
 
 // ---------- 容器 ----------
 const list = ref<VmDto[]>([])
 const total = ref(0)
 const running = ref(0)
 const loading = ref(false)
+
+// ---------- 磁盘占用 ----------
+interface DiskUsageItem {
+  key: string
+  containerName: string
+  username: string
+  status: string
+  diskUsageBytes: number
+  diskUsageHuman: string
+  overLimit: boolean
+}
+const diskUsage = ref<DiskUsageItem[]>([])
+const diskThresholdHuman = ref('')
 
 // ---------- 用户 ----------
 const users = ref<Array<{ id: string; username: string; isAdmin: boolean; createdAt: string; containerCount: number; bonus: number }>>([])
@@ -35,7 +48,9 @@ const editBonusNote = ref<string>('')
 async function refresh() {
   loading.value = true
   try {
-    const [c, u, q] = await Promise.all([api.adminList(), api.adminUsers(), api.adminGetQuota()])
+    const [c, u, q, d] = await Promise.all([
+      api.adminList(), api.adminUsers(), api.adminGetQuota(), api.adminDiskUsage(),
+    ])
     list.value = c.items
     total.value = c.total
     running.value = c.running
@@ -43,6 +58,8 @@ async function refresh() {
     quota.value = q
     editTotal.value = q.total
     resetTotal.value = q.total
+    diskUsage.value = d.items
+    diskThresholdHuman.value = d.thresholdHuman
   } catch (e: any) {
     if (e?.response?.status === 403) {
       msg.error('只有管理员可以访问后台')
@@ -180,6 +197,49 @@ const userColumns = computed<DataTableColumns<any>>(() => [
   { title: '注册时间', key: 'createdAt', render: (r: any) => fmtTime(r.createdAt) },
 ])
 
+const diskColumns = computed<DataTableColumns<DiskUsageItem>>(() => [
+  { title: '容器', key: 'containerName', ellipsis: { tooltip: true } },
+  { title: '用户', key: 'username' },
+  { title: '状态', key: 'status' },
+  {
+    title: '磁盘占用',
+    key: 'diskUsageBytes',
+    render: r =>
+      h(
+        NTag,
+        {
+          type: r.overLimit ? 'error' : (r.diskUsageBytes > 1024 * 1024 * 1024 ? 'warning' : 'success'),
+          size: 'small',
+          round: true,
+        },
+        () => r.diskUsageHuman,
+      ),
+  },
+  {
+    title: '操作',
+    key: 'actions',
+    render: r =>
+      h(
+        NPopconfirm,
+        { onPositiveClick: () => destroyDisk(r.key) },
+        {
+          trigger: () => h(NButton, { size: 'small', type: 'error', ghost: true }, () => '强制销毁'),
+          default: () => '确定强制销毁该容器并清理磁盘?',
+        }
+      ),
+  },
+])
+
+async function destroyDisk(key: string) {
+  try {
+    await api.adminDestroy(key)
+    msg.success('已销毁')
+    await refresh()
+  } catch (e: any) {
+    msg.error('销毁失败:' + (e?.message ?? ''))
+  }
+}
+
 onMounted(refresh)
 </script>
 
@@ -278,6 +338,22 @@ onMounted(refresh)
             :pagination="false"
           />
           <n-empty v-else description="暂无用户" style="padding: 40px 0;" />
+        </n-tab-pane>
+
+        <n-tab-pane name="disk" :tab="`磁盘占用${diskUsage.some(d => d.overLimit) ? ' ⚠️' : ''}`">
+          <p class="tip" style="margin-bottom: 12px;">
+            后台每 10 分钟扫描一次,显示容器可写层总大小。
+            超过 <b>{{ diskThresholdHuman }}</b> 标红。/home 的 5G loop 文件不计入这里(已硬限)。
+          </p>
+          <n-data-table
+            v-if="diskUsage.length > 0"
+            :columns="diskColumns"
+            :data="diskUsage"
+            :bordered="false"
+            :pagination="false"
+            :row-key="(r: DiskUsageItem) => r.key"
+          />
+          <n-empty v-else description="暂无容器" style="padding: 40px 0;" />
         </n-tab-pane>
       </n-tabs>
     </n-card>

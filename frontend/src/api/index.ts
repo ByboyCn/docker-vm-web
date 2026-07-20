@@ -149,6 +149,22 @@ export const api = {
 
   adminSetUserBonus: (userId: string, bonus: number, note = '') =>
     http.post(`/admin/quota/users/${userId}/bonus`, { bonus, note }).then(r => r.data),
+
+  // ---------- disk usage ----------
+  adminDiskUsage: () =>
+    http.get<{
+      threshold: number
+      thresholdHuman: string
+      items: Array<{
+        key: string
+        containerName: string
+        username: string
+        status: string
+        diskUsageBytes: number
+        diskUsageHuman: string
+        overLimit: boolean
+      }>
+    }>('/admin/disk-usage').then(r => r.data),
 }
 
 // 把 axios 实例也导出,供拦截器外使用

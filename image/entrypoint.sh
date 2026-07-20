@@ -5,9 +5,15 @@ USER="${SSH_USER:-user}"
 PASSWORD="${SSH_PASSWORD:-changeme}"
 
 # 创建用户(若已存在则跳过)
+# 注意:/home 可能被外部 bind 成 loop 文件(磁盘配额),挂载点是空 ext4。
+# 此时 home 目录要重新创建并设权限。
 if ! id -u "$USER" >/dev/null 2>&1; then
-    adduser -D -s /bin/bash "$USER"
+    adduser -D -h "/home/$USER" -s /bin/bash "$USER"
 fi
+# 确保 /home/user 存在且属于该用户(无论 /home 是否被外部 bind)
+mkdir -p "/home/$USER"
+chown "$USER:$USER" "/home/$USER"
+chmod 755 "/home/$USER"
 echo "$USER:$PASSWORD" | chpasswd
 
 # 允许该用户使用 sudo(无密码),方便用户在虚拟机里装东西

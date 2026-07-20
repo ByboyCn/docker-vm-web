@@ -14,8 +14,11 @@ RUN dotnet publish -c Release -o /app/publish /p:UseAppHost=false
 FROM mcr.microsoft.com/dotnet/aspnet:10.0
 WORKDIR /app
 
-# 装 docker CLI 不必要,我们用 Docker.DotNet 通过 sock 直接交互
-# 但为了让后端能 build alpine 镜像(image 目录会被挂进来),要确保 sock 可访问即可
+# 装 e2fsprogs(提供 mkfs.ext4,后端创建 loop 卷时用)
+# truncate 由 coreutils 自带
+RUN apt-get update && apt-get install -y --no-install-recommends \
+        e2fsprogs \
+    && rm -rf /var/lib/apt/lists/*
 
 COPY --from=build /app/publish ./
 

@@ -20,6 +20,7 @@ public static class VmEndpoints
             IDockerService docker,
             PortAllocator ports,
             QuotaService quota,
+            DiskQuotaService diskQuota,
             AppOptions opts,
             CancellationToken ct) =>
         {
@@ -56,14 +57,26 @@ public static class VmEndpoints
                 return Results.Json(new { error = "端口分配失败:" + ex.Message }, statusCode: 503);
             }
 
-            VmContainer container;
+            // 3. 准备 loop 卷(磁盘配额主防线)
             try
             {
-                container = await docker.CreateContainerAsync(key, port, username, password, ct);
+                await diskQuota.PrepareVolumeAsync(key, ct);
             }
             catch (Exception ex)
             {
-                // docker 创建失败,退还名额
+                await quota.RefundAsync(user!.Id, consumedFrom, ct);
+                return Results.Json(new { error = "磁盘卷创建失败:" + ex.Message }, statusCode: 500);
+            }
+
+            VmContainer container;
+            try
+            {
+                container = await docker.CreateContainerAsync(key, port, username, password, diskQuota, ct);
+            }
+            catch (Exception ex)
+            {
+                // docker 创建失败,退还名额 + 删 loop 卷
+                await diskQuota.RemoveVolumeAsync(key, ct);
                 await quota.RefundAsync(user!.Id, consumedFrom, ct);
                 return Results.Json(new { error = "容器创建失败:" + ex.Message }, statusCode: 500);
             }
@@ -138,6 +151,7 @@ public static class VmEndpoints
             HttpContext ctx,
             AppDbContext db,
             IDockerService docker,
+            DiskQuotaService diskQuota,
             CancellationToken ct) =>
         {
             if (!ctx.RequireUser(out var user))
@@ -152,6 +166,7 @@ public static class VmEndpoints
             }
 
             await docker.RemoveContainerAsync(c.ContainerId, ct);
+            await diskQuota.RemoveVolumeAsync(key, ct);
             db.Containers.Remove(c);
             await db.SaveChangesAsync(ct);
             return Results.Ok(new { ok = true });

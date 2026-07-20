@@ -14,6 +14,10 @@ services:
       - ./image:/app/image:ro
       # 宿主 LXCFS proc 目录(让子容器 /proc 看到的是实际配额)。宿主没装 lxcfs 时此挂载只是空目录,后端会自动降级。
       - /var/lib/lxcfs/proc:/var/lib/lxcfs/proc:ro
+      # 每个用户容器的 loop 卷(磁盘配额主防线)。后端在此创建 5G 稀疏文件,bind 给子容器 /home
+      - /var/lib/docker-vm-volumes:/var/lib/docker-vm-volumes
+      # docker overlay2 目录(只读),用于后台扫描容器可写层大小做磁盘告警
+      - /var/lib/docker/overlay2:/var/lib/docker/overlay2:ro
     ports:
       - "5000:5000"
     env_file: .env

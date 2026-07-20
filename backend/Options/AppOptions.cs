@@ -49,6 +49,23 @@ public class AppOptions
     /// <summary>每台容器磁盘配额(如 "5g")。依赖宿主 xfs/ext4 quota,不生效时不报错。</summary>
     public string VmDiskSize { get; set; } = "5g";
 
+    // ---------- loop 文件磁盘配额(主防线,挂到 /home)----------
+
+    /// <summary>宿主上存放每容器 loop 文件的目录。需在 docker-compose 挂载到 backend。</summary>
+    public string VolumeDir { get; set; } = "/var/lib/docker-vm-volumes";
+
+    /// <summary>每个 loop 文件大小(字节)。默认 5G。会从 VM_DISK_SIZE 解析。</summary>
+    public long DiskQuotaBytes { get; set; } = 5L * 1024 * 1024 * 1024;
+
+    /// <summary>后台扫描告警阈值(字节)。默认 6G。会从 VM_DISK_ALERT 解析。</summary>
+    public long DiskAlertBytes { get; set; } = 6L * 1024 * 1024 * 1024;
+
+    /// <summary>后台扫描间隔(分钟)。默认 10。</summary>
+    public int DiskScanIntervalMinutes { get; set; } = 10;
+
+    /// <summary>docker overlay2 目录,用于扫描容器可写层大小。只读挂载到 backend。</summary>
+    public string DockerOverlayDir { get; set; } = "/var/lib/docker/overlay2";
+
     // ---------- 名额池 ----------
 
     /// <summary>首启初始化的全局名额总额度。</summary>

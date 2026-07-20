@@ -25,6 +25,7 @@ public class DockerService : IDockerService
         int hostPort,
         string username,
         string password,
+        DiskQuotaService diskQuota,
         CancellationToken ct = default)
     {
         var name = $"vm-{key[..Math.Min(8, key.Length)]}";
@@ -73,18 +74,7 @@ public class DockerService : IDockerService
 
                 // ---------- LXCFS(可选,让容器内 /proc 反映实际配额)----------
                 // 仅在宿主 lxcfs 可用时挂载;否则保持空,容器内 /proc 看到的是宿主真实资源
-                Binds = _opts.LxcfsActuallyEnabled
-                    ? new List<string>
-                    {
-                        $"{_opts.LxcfsProcDir}/meminfo:/proc/meminfo:ro",
-                        $"{_opts.LxcfsProcDir}/cpuinfo:/proc/cpuinfo:ro",
-                        $"{_opts.LxcfsProcDir}/loadavg:/proc/loadavg:ro",
-                        $"{_opts.LxcfsProcDir}/stat:/proc/stat:ro",
-                        $"{_opts.LxcfsProcDir}/uptime:/proc/uptime:ro",
-                        $"{_opts.LxcfsProcDir}/diskstats:/proc/diskstats:ro",
-                        $"{_opts.LxcfsProcDir}/swaps:/proc/swaps:ro",
-                    }
-                    : null,
+                Binds = BuildBinds(diskQuota.VolumePath(key)),
 
                 // ---------- 安全:容器内非 root 拿不到真实宿主信息 ----------
                 ReadonlyRootfs = false,   // true 会破坏 sshd 写 host key,保持 false
@@ -166,5 +156,33 @@ public class DockerService : IDockerService
             item.Status = await GetStatusAsync(item.ContainerId, ct);
         }
         return list;
+    }
+
+    /// <summary>
+    /// 构造 bind mounts:LXCFS(可选)+ /home loop 文件(磁盘配额主防线)。
+    /// </summary>
+    private List<string> BuildBinds(string homeVolumePath)
+    {
+        var binds = new List<string>();
+
+        // 1. /home 挂 loop 文件(磁盘配额主防线)
+        binds.Add($"{homeVolumePath}:/home");
+
+        // 2. LXCFS /proc 文件(可选)
+        if (_opts.LxcfsActuallyEnabled)
+        {
+            binds.AddRange(new[]
+            {
+                $"{_opts.LxcfsProcDir}/meminfo:/proc/meminfo:ro",
+                $"{_opts.LxcfsProcDir}/cpuinfo:/proc/cpuinfo:ro",
+                $"{_opts.LxcfsProcDir}/loadavg:/proc/loadavg:ro",
+                $"{_opts.LxcfsProcDir}/stat:/proc/stat:ro",
+                $"{_opts.LxcfsProcDir}/uptime:/proc/uptime:ro",
+                $"{_opts.LxcfsProcDir}/diskstats:/proc/diskstats:ro",
+                $"{_opts.LxcfsProcDir}/swaps:/proc/swaps:ro",
+            });
+        }
+
+        return binds;
     }
 }
