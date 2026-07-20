@@ -19,8 +19,9 @@ rm -f /etc/ssh/ssh_host_*
 ssh-keygen -A
 
 # ---------- 安装 free/nproc/lscpu 的"包装脚本" ----------
-# 这些命令默认走 syscall 或 /sys,会看到宿主真实资源;改为读 LXCFS 渲染过的
-# /proc/meminfo 和 /proc/cpuinfo,让用户看到的数字和实际配额一致。
+# 这些命令默认走 syscall 或 /sys,会看到宿主真实资源。改为:
+# - 内存:读 LXCFS 渲染过的 /proc/meminfo(生效)
+# - CPU:直接读 cgroup 配额(因为很多宿主的 lxcfs 不支持 cgroup v2 渲染 cpuinfo)
 install_wrappers() {
     # fake free:从 /proc/meminfo 提取
     cat > /usr/local/bin/free <<'FREE_EOF'
@@ -49,21 +50,43 @@ END {
 FREE_EOF
     chmod +x /usr/local/bin/free
 
-    # fake nproc:数 /proc/cpuinfo 里的 processor 行
+    # fake nproc:直接读 cgroup CPU 配额(cgroup v2 优先,v1 兜底)
+    #   v2: /sys/fs/cgroup/cpu.max 格式 "quota period"(如 "100000 100000")或 "max"
+    #   v1: /sys/fs/cgroup/cpu/cpu.cfs_quota_us 和 cpu.cfs_period_us
     cat > /usr/local/bin/nproc <<'NPROC_EOF'
 #!/bin/sh
-# 走 LXCFS 渲染过的 /proc/cpuinfo,而不是 sched_getaffinity
-grep -c '^processor' /proc/cpuinfo 2>/dev/null || echo 1
+read_cpu_count() {
+    # cgroup v2
+    if [ -r /sys/fs/cgroup/cpu.max ]; then
+        read -r quota period < /sys/fs/cgroup/cpu.max 2>/dev/null
+        if [ "$quota" != "max" ] && [ -n "$quota" ] && [ -n "$period" ] && [ "$period" != "0" ]; then
+            n=$(( quota / period ))
+            [ "$n" -ge 1 ] && echo "$n" && return
+        fi
+    fi
+    # cgroup v1
+    if [ -r /sys/fs/cgroup/cpu/cpu.cfs_quota_us ] && [ -r /sys/fs/cgroup/cpu/cpu.cfs_period_us ]; then
+        quota=$(cat /sys/fs/cgroup/cpu/cpu.cfs_quota_us 2>/dev/null)
+        period=$(cat /sys/fs/cgroup/cpu/cpu.cfs_period_us 2>/dev/null)
+        if [ "$quota" -gt 0 ] && [ "$period" -gt 0 ] 2>/dev/null; then
+            n=$(( quota / period ))
+            [ "$n" -ge 1 ] && echo "$n" && return
+        fi
+    fi
+    # 兜底:数 cpuinfo(可能不准,但好过啥都没有)
+    grep -c '^processor' /proc/cpuinfo 2>/dev/null || echo 1
+}
+read_cpu_count
 NPROC_EOF
     chmod +x /usr/local/bin/nproc
 
-    # fake lscpu:简化版,只显示核数和型号
+    # fake lscpu:简化版,核数走 cgroup,型号走 cpuinfo 第一行
     cat > /usr/local/bin/lscpu <<'LSCPU_EOF'
 #!/bin/sh
-n=$(grep -c '^processor' /proc/cpuinfo 2>/dev/null || echo 1)
+n=$(/usr/local/bin/nproc)
 echo "Architecture:        $(uname -m)"
 echo "CPU(s):              $n"
-grep -m1 '^model name' /proc/cpuinfo | sed 's/^model name[[:space:]]*: */Model name:          /'
+grep -m1 '^model name' /proc/cpuinfo 2>/dev/null | sed 's/^model name[[:space:]]*: */Model name:          /'
 LSCPU_EOF
     chmod +x /usr/local/bin/lscpu
 }
